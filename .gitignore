@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+data/*.csv
+data/ca_bundle.pem
+data/watchlist.json
+data/scan_history.json
+!data/.gitkeep
+streamlit_out.log
+streamlit_err.log
+streamlit.pid
