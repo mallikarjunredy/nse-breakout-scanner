@@ -713,13 +713,29 @@ def render_preview_table_html(df: pd.DataFrame, title: str, icon: str, nav_targe
     )
     st.markdown(table_html, unsafe_allow_html=True)
 
+    # The ⭐/☆ in the "Watch" column is a plain HTML cell (st.markdown has no
+    # click handler), so it isn't clickable by itself -- this picker + button
+    # pair is the actual way to toggle watchlist status for a row without
+    # scrolling down to the detail panel.
     display_options = [t.replace(".NS", "") for t in df["Ticker"].tolist()]
     idx_map = dict(zip(display_options, df["Ticker"].tolist()))
-    chosen_display = st.selectbox(
-        "🔎 View details for", display_options, key=f"pick_{title}", label_visibility="collapsed",
-    )
+    pick_col, watch_col = st.columns([3, 1])
+    with pick_col:
+        chosen_display = st.selectbox(
+            "🔎 View details for", display_options, key=f"pick_{title}", label_visibility="collapsed",
+        )
     if chosen_display:
         st.session_state.selected_ticker = idx_map[chosen_display]
+        chosen_ticker = idx_map[chosen_display]
+        with watch_col:
+            if chosen_ticker in watchlist_tickers:
+                if st.button("🗑️ Unwatch", key=f"prev_unwatch_{title}", width="stretch"):
+                    watchlist.remove(chosen_ticker)
+                    st.rerun()
+            else:
+                if st.button("⭐ Watch", key=f"prev_watch_{title}", width="stretch"):
+                    watchlist.add(chosen_ticker)
+                    st.rerun()
 
 
 def render_detail_panel():
