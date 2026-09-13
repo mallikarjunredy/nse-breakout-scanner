@@ -355,12 +355,18 @@ with h_right:
         unsafe_allow_html=True,
     )
 
-st.markdown(
-    f'<div class="meta-text" style="text-align:left; margin: -0.5rem 0 0.8rem 0;">'
-    f"📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed "
-    f"&nbsp;·&nbsp; Market status reflects trading hours only, not exchange holidays.</div>",
-    unsafe_allow_html=True,
-)
+# Collapsed to a small info icon instead of an always-visible text banner --
+# the disclosure text still has to be reachable on every page (see
+# CLAUDE.md's "never claim real-time/official NSE data" rule), just one
+# click away via this popover rather than taking up a full line by default.
+disclaimer_col, _ = st.columns([0.05, 0.95])
+with disclaimer_col:
+    with st.popover("📡", help="Data source & market status disclosure"):
+        st.caption(
+            "**Data Source:** Yahoo Finance — delayed / cached / EOD data, "
+            "not an official NSE real-time feed.\n\n"
+            "**Market status** reflects trading hours only, not exchange holidays."
+        )
 
 if search_submitted and search_input.strip():
     with st.spinner(f"Looking up {search_input.strip()}..."):
