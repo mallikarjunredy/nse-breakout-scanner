@@ -236,16 +236,23 @@ st.markdown(
     .metric-value { font-size: 1.7rem; font-weight: 800; color: #EAF2FA; line-height: 1; }
     .metric-label { font-size: 0.75rem; color: #8FA3C0; margin-top: 0.25rem; }
     .metric-sub { font-size: 0.7rem; color: #6FE3D6; margin-top: 0.3rem; }
-    .html-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .html-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; table-layout: fixed; }
     .html-table th {
         text-align: left; color: #8FA3C0; font-weight: 600; font-size: 0.72rem;
-        text-transform: uppercase; letter-spacing: 0.03em; padding: 0.4rem 0.6rem;
+        text-transform: uppercase; letter-spacing: 0.03em; padding: 0.4rem 0.4rem;
         border-bottom: 1px solid rgba(255,255,255,0.08);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .html-table td {
-        padding: 0.55rem 0.6rem; border-bottom: 1px solid rgba(255,255,255,0.05); color: #DCE6F2;
+        padding: 0.55rem 0.4rem; border-bottom: 1px solid rgba(255,255,255,0.05); color: #DCE6F2;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .html-table tr:hover td { background: rgba(79,209,232,0.05); }
+    .html-table .ellipsis-cell { max-width: 0; }
+    .preview-table-wrap { width: 100%; overflow-x: auto; }
+    @media (max-width: 900px) {
+        .html-table th:nth-child(2), .html-table td:nth-child(2) { display: none; }
+    }
     .ticker-link { color: #4FD1E8; font-weight: 700; }
     .distance-pos { color: #3ECF8E; font-weight: 600; }
     .distance-neg { color: #FF6B6B; font-weight: 600; }
@@ -671,11 +678,15 @@ def render_preview_table_html(df: pd.DataFrame, title: str, icon: str, nav_targe
         st.info("No candidates right now.")
         return
 
+    # Preview tables live in a narrower column (see the [2.1, 1] split on the
+    # Home page), so this deliberately shows fewer columns than the full
+    # Scanner table -- just enough to act on at a glance, so it fits without
+    # horizontal scrolling. Rank/Distance/Vol Ratio/RSI/Quality Score are
+    # still shown in the full Scanner-page table (one click away via
+    # "View All"); Buy/Support/Resistance/Stop Loss stay on every table per
+    # the documented requirement.
     rows_html = ""
     for _, r in df.iterrows():
-        dist = r.get("% From Resistance")
-        dist_str = f"{dist:+.2f}%" if pd.notna(dist) else "N/A"
-        dist_class = "distance-pos" if (pd.notna(dist) and dist >= 0) else "distance-neg"
         star = "⭐" if r["Ticker"] in watchlist_tickers else "☆"
         company = (r.get("Company Name") or r["Ticker"])
         buy_lvl = f"{currency}{r['Buy Level']:.2f}" if pd.notna(r.get("Buy Level")) else "N/A"
@@ -683,27 +694,21 @@ def render_preview_table_html(df: pd.DataFrame, title: str, icon: str, nav_targe
         stop_lvl = f"{currency}{r['Stop Loss']:.2f}" if pd.notna(r.get("Stop Loss")) else "N/A"
         rows_html += (
             "<tr>"
-            f"<td>{int(r['Rank'])}</td>"
             f"<td class='ticker-link'>{r['Ticker'].replace('.NS', '')}</td>"
-            f"<td style='white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px;'>{company}</td>"
+            f"<td class='ellipsis-cell' title='{company}'>{company}</td>"
             f"<td>{currency}{r['Current Price']:.2f}</td>"
             f"<td>{buy_lvl}</td>"
             f"<td>{currency}{r['Resistance Level']:.2f}</td>"
             f"<td>{support_lvl}</td>"
             f"<td>{stop_lvl}</td>"
-            f"<td class='{dist_class}'>{dist_str}</td>"
-            f"<td>{r['Volume Ratio']:.1f}x</td>"
-            f"<td>{r['RSI']:.0f}</td>"
             f"<td>{_signal_pill(r['Signal'])}</td>"
-            f"<td>{int(r['Quality Score']) if pd.notna(r.get('Quality Score')) else 'N/A'}</td>"
             f"<td>{star}</td>"
             "</tr>"
         )
     table_html = (
-        '<div style="overflow-x:auto;"><table class="html-table"><thead><tr>'
-        "<th>Rank</th><th>Ticker</th><th>Company</th><th>LTP</th><th>Buy Level</th><th>Resistance</th>"
-        "<th>Support</th><th>Stop Loss</th><th>Distance</th><th>Vol Ratio</th><th>RSI</th>"
-        "<th>Signal</th><th>Score</th><th>Watch</th>"
+        '<div class="preview-table-wrap"><table class="html-table"><thead><tr>'
+        "<th>Ticker</th><th>Company</th><th>LTP</th><th>Buy</th><th>Resistance</th>"
+        "<th>Support</th><th>Stop Loss</th><th>Signal</th><th>Watch</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table></div>"
     )
     st.markdown(table_html, unsafe_allow_html=True)
