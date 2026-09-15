@@ -114,6 +114,8 @@ if "search_error" not in st.session_state:
     st.session_state.search_error = None
 if "nav_page" not in st.session_state:
     st.session_state.nav_page = "Home"
+if "home_timeframe" not in st.session_state:
+    st.session_state.home_timeframe = "Daily"
 
 _PARAM_DEFAULTS = {
     "param_market_label": list(config.MARKETS.keys())[0],
@@ -126,6 +128,63 @@ _PARAM_DEFAULTS = {
 for _k, _v in _PARAM_DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+# The Strategy Settings page edits a separate "draft" copy of every
+# strategy control, seeded from the applied (param_*) values. Nothing a
+# user types there takes effect until "Save Settings" copies draft -> param
+# -- param_* alone drives scan_market()/the cache key, unchanged from
+# before this draft/save split was added.
+_STRATEGY_KEYS = ["market_label", "rsi_range", "volume_multiplier", "near_pct", "min_price", "breakout_periods"]
+for _k in _STRATEGY_KEYS:
+    _draft_key = f"draft_{_k}"
+    if _draft_key not in st.session_state:
+        st.session_state[_draft_key] = st.session_state[f"param_{_k}"]
+
+# "Reset to Saved" can't overwrite draft_* directly from inside the button's
+# own click handler -- by that point in the script the draft_*-keyed widgets
+# (selectbox/slider/etc. in render_strategy_settings_form) have already
+# instantiated for this run, and Streamlit raises
+# StreamlitWidgetAlreadyInstantiatedError on any further write to that key
+# in the same run. So the button just sets this flag + reruns, and the
+# actual draft<-param copy happens here, before those widgets exist again.
+if st.session_state.pop("_pending_strategy_reset", False):
+    for _k in _STRATEGY_KEYS:
+        st.session_state[f"draft_{_k}"] = st.session_state[f"param_{_k}"]
+
+
+def _strategy_is_dirty() -> bool:
+    for _k in _STRATEGY_KEYS:
+        draft_v, saved_v = st.session_state[f"draft_{_k}"], st.session_state[f"param_{_k}"]
+        if _k == "breakout_periods":
+            if set(draft_v) != set(saved_v):
+                return True
+        elif _k == "rsi_range":
+            if tuple(draft_v) != tuple(saved_v):
+                return True
+        elif draft_v != saved_v:
+            return True
+    return False
+
+
+def _validate_draft_strategy() -> list[str]:
+    errors = []
+    if not st.session_state.draft_breakout_periods:
+        errors.append("Select at least one Breakout Period.")
+    if st.session_state.draft_volume_multiplier < 1.0:
+        errors.append("Min Volume Ratio must be at least 1.0x.")
+    lo, hi = st.session_state.draft_rsi_range
+    if lo > hi:
+        errors.append("RSI range minimum cannot exceed the maximum.")
+    draft_market_code = config.MARKETS[st.session_state.draft_market_label]
+    if draft_market_code in ("NSE", "NSE_ALL") and st.session_state.draft_min_price < config.MIN_PRICE_INR:
+        errors.append(f"Min Price cannot be set below the mandatory ₹{config.MIN_PRICE_INR:.0f} floor.")
+    return errors
+
+
+def _save_draft_strategy():
+    for _k in _STRATEGY_KEYS:
+        st.session_state[f"param_{_k}"] = st.session_state[f"draft_{_k}"]
+
 
 refresh_minutes = config.AUTOREFRESH_INTERVAL_MS // 60000
 refresh_label = f"{refresh_minutes // 60} hrs" if refresh_minutes % 60 == 0 else f"{refresh_minutes} min"
@@ -195,7 +254,22 @@ st.markdown(
         font-size: 0.75rem; font-weight: 700; letter-spacing: 0.03em; border: 1px solid;
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-    .meta-text { color: #9FB3D1; font-size: 0.75rem; text-align: right; line-height: 1.3; }
+    .meta-text { color: #B7C6DE; font-size: 0.75rem; text-align: right; line-height: 1.3; }
+    .home-header-compact {
+        display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap;
+        padding: 0.55rem 0.9rem; margin-bottom: 0.6rem;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(79,209,232,0.15); border-radius: 12px;
+    }
+    .home-header-greet { font-size: 0.95rem; font-weight: 700; color: #EAF2FA; white-space: nowrap; }
+    .home-hero { padding: 0.7rem 1rem 0.5rem 1rem; margin-bottom: 0.3rem; }
+    .home-hero-title { font-size: 1.6rem; font-weight: 800; color: #EAF2FA; line-height: 1.2; }
+    .home-hero-sub { font-size: 1rem; color: #CFE3F5; margin-top: 0.15rem; }
+    .condition-pill {
+        display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.9rem; border-radius: 10px;
+        background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
+        color: #CFE3F5; font-size: 0.82rem; font-weight: 600; white-space: nowrap;
+    }
+    .active-strategy-name { font-size: 1.05rem; font-weight: 800; color: #EAF2FA; margin: 0.15rem 0 0.4rem 0; }
     .nav-tagline {
         margin-top: 1rem; padding: 0.9rem; border-radius: 12px;
         background: linear-gradient(135deg, rgba(79,209,232,0.14), rgba(28,37,65,0.4));
@@ -234,7 +308,7 @@ st.markdown(
         justify-content: center; font-size: 1rem; margin-bottom: 0.5rem;
     }
     .metric-value { font-size: 1.7rem; font-weight: 800; color: #EAF2FA; line-height: 1; }
-    .metric-label { font-size: 0.75rem; color: #8FA3C0; margin-top: 0.25rem; }
+    .metric-label { font-size: 0.75rem; color: #A9BBD6; margin-top: 0.25rem; }
     .metric-sub { font-size: 0.7rem; color: #6FE3D6; margin-top: 0.3rem; }
     .html-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; table-layout: fixed; }
     .html-table th {
@@ -478,6 +552,8 @@ def _display_columns():
         "Sector": st.column_config.TextColumn("Sector", width="small"),
         "Signal": st.column_config.TextColumn("Signal", width="small"),
         "Current Price": st.column_config.NumberColumn("LTP", format=f"{currency}%.2f"),
+        "Change %": st.column_config.NumberColumn("Chg %", format="%.2f%%"),
+        "Result Date": st.column_config.TextColumn("Result Date", width="small"),
         "P/E Ratio": st.column_config.NumberColumn("P/E Ratio", format="%.2f"),
         "Volume Ratio": st.column_config.NumberColumn("Volume Ratio", format="%.2fx"),
         "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
@@ -497,13 +573,9 @@ def _display_columns():
 
 
 _FULL_COLUMN_ORDER = [
-    "Rank", "Ticker", "Company Name", "Sector", "Signal", "Current Price", "P/E Ratio",
+    "Rank", "Ticker", "Company Name", "Sector", "Signal", "Current Price", "Change %", "P/E Ratio",
     "Resistance Level", "% From Resistance", "Volume Ratio", "RSI", "Quality Score",
-    "Buy Level", "Stop Loss", "Resistance Period", "52W High", "Support Level",
-]
-_PREVIEW_COLUMN_ORDER = [
-    "Rank", "Ticker", "Company Name", "Current Price", "Resistance Level",
-    "% From Resistance", "Volume Ratio", "RSI", "Signal", "Quality Score",
+    "Buy Level", "Stop Loss", "Resistance Period", "52W High", "Support Level", "Result Date",
 ]
 
 
@@ -518,6 +590,8 @@ def _watchlist_columns():
         "Sector": st.column_config.TextColumn("Sector", width="small"),
         "Status": st.column_config.TextColumn("Status", width="small"),
         "Current Price": st.column_config.NumberColumn("Current Price", format="%.2f"),
+        "Change %": st.column_config.NumberColumn("Chg %", format="%.2f%%"),
+        "Result Date": st.column_config.TextColumn("Result Date", width="small"),
         "P/E Ratio": st.column_config.NumberColumn("P/E Ratio", format="%.2f"),
         "Volume Ratio": st.column_config.NumberColumn("Volume Ratio", format="%.2fx"),
         "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
@@ -546,78 +620,391 @@ def _select_from_table(df: pd.DataFrame, columns_order: list, key: str, height: 
 # Reusable blocks
 # ---------------------------------------------------------------------------
 
-def render_scan_parameters(button_key: str):
+def render_strategy_settings_form():
+    """Full editable strategy form -- lives ONLY on the Strategy Settings
+    page. Binds to draft_* keys; nothing here affects a scan until "Save
+    Settings" copies the draft into the param_* keys that scan_market()
+    actually reads.
+    """
     with st.container(border=True):
-        st.markdown("##### ⚙️ Scan Parameters (Your Strategy)")
-        c1, c2, c3, c4, c5, c6 = st.columns([1.4, 1.3, 1, 1.2, 1.3, 1])
-        c1.selectbox("Market", list(config.MARKETS.keys()), key="param_market_label")
+        if _strategy_is_dirty():
+            st.info("You have unsaved changes below. Click **Save Settings** to apply them to new scans.")
+        c1, c2 = st.columns(2)
+        c1.selectbox("Market", list(config.MARKETS.keys()), key="draft_market_label")
         c2.multiselect(
-            "Breakout Period", options=list(config.RESISTANCE_LOOKBACKS.keys()), key="param_breakout_periods",
+            "Breakout Period", options=list(config.RESISTANCE_LOOKBACKS.keys()), key="draft_breakout_periods",
             help="Which resistance lookback windows to check (5D-3Y).",
         )
-        c3.number_input("Min Volume Ratio", min_value=1.0, max_value=10.0, step=0.1, key="param_volume_multiplier")
-        c4.slider("RSI Range", min_value=0, max_value=100, key="param_rsi_range")
+        c3, c4 = st.columns(2)
+        c3.number_input("Min Volume Ratio", min_value=1.0, max_value=10.0, step=0.1, key="draft_volume_multiplier")
+        c4.slider("RSI Range", min_value=0, max_value=100, key="draft_rsi_range")
+        c5, c6 = st.columns(2)
         c5.slider(
-            "Min Distance to Resistance (%)", min_value=0.5, max_value=10.0, step=0.5, key="param_near_pct",
+            "Min Distance to Resistance (%) — Near Breakout threshold", min_value=0.5, max_value=10.0,
+            step=0.5, key="draft_near_pct",
         )
-        cur_market = config.MARKETS[st.session_state.param_market_label]
-        if cur_market in ("NSE", "NSE_ALL"):
+        draft_market_code = config.MARKETS[st.session_state.draft_market_label]
+        if draft_market_code in ("NSE", "NSE_ALL"):
             c6.number_input(
-                "Min Price (₹)", min_value=float(config.MIN_PRICE_INR), step=10.0, key="param_min_price",
-                help=f"Mandatory: only price strictly above ₹{config.MIN_PRICE_INR:.0f} qualifies.",
+                "Min Price (₹)", min_value=float(config.MIN_PRICE_INR), step=10.0, key="draft_min_price",
+                help=f"Mandatory: only price strictly above ₹{config.MIN_PRICE_INR:.0f} qualifies -- "
+                     "a stricter (higher) floor is allowed, this one is not.",
             )
         else:
             c6.caption("No mandatory\nprice floor for\nthis market.")
-        if st.button("▶️ Run Scan", type="primary", width="stretch", key=button_key):
-            st.session_state["_trigger_scan"] = True
+
+        errors = _validate_draft_strategy()
+        for e in errors:
+            st.error(e)
+
+        dirty = _strategy_is_dirty()
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button(
+                "💾 Save Settings", type="primary", width="stretch",
+                disabled=bool(errors), key="save_strategy_btn",
+            ):
+                _save_draft_strategy()
+                st.success("Strategy settings saved — the next scan will use them.")
+                st.rerun()
+        with b2:
+            if st.button("↩️ Reset to Saved", width="stretch", disabled=not dirty, key="reset_strategy_btn"):
+                st.session_state["_pending_strategy_reset"] = True
+                st.rerun()
+
+
+def render_strategy_summary_bar(show_run_button: bool, run_button_key: str | None = None):
+    """Compact, read-only view of the currently SAVED (applied) strategy --
+    used on Home and Scanner instead of the old always-visible edit form.
+    """
+    periods_order = list(config.RESISTANCE_LOOKBACKS.keys())
+    periods_label = ", ".join(
+        sorted(breakout_periods, key=lambda p: periods_order.index(p) if p in periods_order else 99)
+    ) or "None selected"
+    price_part = f" · Price > {currency}{min_price_input:.2f}" if min_price_input else ""
+    ist_scan_label = datetime.datetime.fromtimestamp(scan_time, tz=ZoneInfo("Asia/Kolkata")).strftime("%I:%M %p IST")
+
+    st.markdown("**🎯 Active Strategy**")
+    st.caption(
+        f"RSI {rsi_min_val:.0f}–{rsi_max_val:.0f} · Vol ≥{volume_multiplier:.1f}x · "
+        f"Near ≤{near_breakout_pct:.1f}%{price_part} · Periods: {periods_label}"
+    )
+    st.caption(f"Market: {config.MARKET_LABELS.get(market, market)} · Last scanned: {ist_scan_label}")
+    if _strategy_is_dirty():
+        st.warning("⚠️ You have unsaved changes in Strategy Settings — they won't affect scans until saved.")
+
+    if show_run_button:
+        b1, b2 = st.columns(2)
+    else:
+        b1, b2 = st.container(), None
+    with b1:
+        if st.button("✏️ Edit Strategy", key=f"edit_strategy_{run_button_key or 'default'}", width="stretch"):
+            st.session_state.nav_page = "Strategy Settings"
             st.rerun()
+    if show_run_button and b2 is not None:
+        with b2:
+            if st.button("▶️ Run Scan", key=run_button_key, type="primary", width="stretch"):
+                st.session_state["_trigger_scan"] = True
+                st.rerun()
+
+
+def render_home_header():
+    ist = ZoneInfo("Asia/Kolkata")
+    scan_label = datetime.datetime.fromtimestamp(scan_time, tz=ist).strftime("%d %b %Y, %I:%M %p IST")
+
+    asof = result.get("data_asof_date")
+    partial_note = ""
+    if asof:
+        asof_label = asof.strftime("%d %b %Y")
+        today_ist = datetime.datetime.now(ist).date()
+        if asof == today_ist and market_is_open and market in ("NSE", "NSE_ALL"):
+            partial_note = (
+                ' <span style="color:#FFB020;">⚠️ Today\'s session is still open — the latest daily '
+                "candle may still be forming, not a confirmed close.</span>"
+            )
+    else:
+        asof_label = "N/A"
+
+    st.markdown(
+        '<div class="home-hero">'
+        '<div class="home-hero-title">Your Market Overview</div>'
+        '<div class="home-hero-sub">Welcome back, <b>Mallikarjun</b></div>'
+        '<div class="meta-text" style="text-align:left; margin-top:0.3rem;">'
+        f"📡 Yahoo Finance · End-of-day data &nbsp;·&nbsp; Prices as of {asof_label} close "
+        f"&nbsp;·&nbsp; Scan: {scan_label}{partial_note}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    if result["scanned"] == 0:
+        st.error(
+            "This scan couldn't retrieve any price data for the selected universe — likely a temporary "
+            "Yahoo Finance or network issue. Try ▶️ Run Scan again shortly."
+        )
+    elif next_refresh_in <= 0:
+        st.caption("⏳ This data may be stale — an auto-refresh is due. Use ▶️ Run Scan for the latest.")
+
+
+def _apply_universe_change(market_code: str):
+    label = next(k for k, v in config.MARKETS.items() if v == market_code)
+    st.session_state.param_market_label = label
+    st.session_state.draft_market_label = label
+    st.rerun()
+
+
+def render_home_top_controls():
+    with st.container(border=True):
+        u_col, pill_col, cta_col, strat_col = st.columns([1.7, 1.7, 1.3, 2.4])
+
+        current_universe_label = {"NSE": "Nifty 500", "NSE_ALL": "All Stocks"}.get(market)
+        with u_col:
+            if current_universe_label is None:
+                st.caption(f"Universe: **{config.MARKET_LABELS.get(market, market)}**")
+                st.caption("Switch market in ⚙️ Strategy Settings.")
+            else:
+                n1, n2 = st.columns(2)
+                with n1:
+                    if st.button(
+                        "Nifty 500", key="home_universe_nifty500", width="stretch",
+                        type="primary" if current_universe_label == "Nifty 500" else "secondary",
+                    ):
+                        if current_universe_label != "Nifty 500":
+                            _apply_universe_change("NSE")
+                with n2:
+                    if st.button(
+                        "All Stocks", key="home_universe_allstocks", width="stretch",
+                        type="primary" if current_universe_label == "All Stocks" else "secondary",
+                    ):
+                        if current_universe_label != "All Stocks":
+                            _apply_universe_change("NSE_ALL")
+
+        with pill_col:
+            if min_price_input:
+                st.markdown(
+                    f'<div class="condition-pill">🔽 Closing price &gt; {currency}{min_price_input:.2f}</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown('<div class="condition-pill">No mandatory price floor</div>', unsafe_allow_html=True)
+
+        with cta_col:
+            if st.button("▶ Open Scanner", key="home_open_scanner", width="stretch", type="primary"):
+                st.session_state.nav_page = "Scanner"
+                st.rerun()
+
+        with strat_col:
+            st.caption("Active strategy")
+            st.markdown('<div class="active-strategy-name">Breakout Scanner</div>', unsafe_allow_html=True)
+            e1, e2 = st.columns(2)
+            with e1:
+                if st.button("Edit Strategy →", key="home_edit_strategy_top", width="stretch"):
+                    st.session_state.nav_page = "Strategy Settings"
+                    st.rerun()
+            with e2:
+                if st.button("▶️ Run Scan", key="home_run_scan_top", width="stretch"):
+                    st.session_state["_trigger_scan"] = True
+                    st.rerun()
+
+        periods_order = list(config.RESISTANCE_LOOKBACKS.keys())
+        periods_label = ", ".join(
+            sorted(breakout_periods, key=lambda p: periods_order.index(p) if p in periods_order else 99)
+        ) or "None selected"
+        ist_scan_label = datetime.datetime.fromtimestamp(
+            scan_time, tz=ZoneInfo("Asia/Kolkata")
+        ).strftime("%I:%M %p IST")
         st.caption(
-            f"Active condition: Price > {currency}{min_price_input:.2f}" if min_price_input else
-            "No mandatory price floor for this market."
+            f"RSI {rsi_min_val:.0f}–{rsi_max_val:.0f} · Vol ≥{volume_multiplier:.1f}x · "
+            f"Near ≤{near_breakout_pct:.1f}% · Periods: {periods_label} · "
+            f"{result['universe_size']} instruments · Last scanned {ist_scan_label}"
         )
+        if _strategy_is_dirty():
+            st.warning("⚠️ You have unsaved changes in Strategy Settings — they won't affect scans until saved.")
 
 
-def render_summary_cards():
-    hour = datetime.datetime.now().hour
-    greeting = "Good morning" if hour < 12 else ("Good afternoon" if hour < 17 else "Good evening")
-    status_col = "#3ECF8E" if market_is_open else "#FF6B6B"
+def render_home_summary_tiles():
+    tiles = [
+        ("🗄️", "#2E5BFF22", "#4F7CFF", result["eligible"], "Eligible Stocks", None),
+        ("✅", "#3ECF8E22", "#3ECF8E", result["scanned"], "Successfully Scanned", None),
+        ("🚀", "#FF6B6B22", "#FF6B6B", len(result["breakout"]), "Breakouts", "Scanner"),
+        ("🔭", "#B26BFF22", "#B26BFF", len(result["near_breakout"]), "Near Breakouts", "Scanner"),
+    ]
+    cols = st.columns(4)
+    for col, (icon, bg, color, value, label, nav_target) in zip(cols, tiles):
+        with col:
+            with st.container(border=True):
+                st.markdown(
+                    f'<div class="metric-icon" style="background:{bg}; color:{color};">{icon}</div>'
+                    f'<div class="metric-value">{value}</div><div class="metric-label">{label}</div>',
+                    unsafe_allow_html=True,
+                )
+                if nav_target:
+                    if st.button("View →", key=f"tile_{label}", width="stretch"):
+                        st.session_state.nav_page = nav_target
+                        st.rerun()
+    st.caption(
+        f"Weekly timeframe (same strategy, weekly bars): {len(result['weekly_breakout'])} breakouts, "
+        f"{len(result['weekly_near_breakout'])} near breakouts — see the Daily/Weekly toggle below."
+    )
 
-    def _card(icon, icon_bg, icon_color, value, label):
-        return (
-            f'<div class="summary-card">'
-            f'<div class="metric-icon" style="background:{icon_bg}; color:{icon_color};">{icon}</div>'
-            f'<div class="metric-value">{value}</div>'
-            f'<div class="metric-label">{label}</div></div>'
+
+def render_latest_opportunities_card() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Renders the card and returns (breakout_df, near_df) for the currently
+    chosen timeframe, so the caller can use them for the default-selected-
+    ticker logic without recomputing the toggle state.
+    """
+    with st.container(border=True):
+        head_col, d_col, w_col = st.columns([2.6, 0.9, 0.9])
+        with head_col:
+            st.markdown(
+                '<div class="card-header"><span class="badge-dot" style="background:#4FD1E8;"></span>'
+                "📊 Latest Opportunities</div>",
+                unsafe_allow_html=True,
+            )
+        home_timeframe = st.session_state.home_timeframe
+        with d_col:
+            if st.button(
+                "Daily", key="home_tf_daily", width="stretch",
+                type="primary" if home_timeframe == "Daily" else "secondary",
+            ):
+                st.session_state.home_timeframe = "Daily"
+                st.rerun()
+        with w_col:
+            if st.button(
+                "Weekly", key="home_tf_weekly", width="stretch",
+                type="primary" if home_timeframe == "Weekly" else "secondary",
+            ):
+                st.session_state.home_timeframe = "Weekly"
+                st.rerun()
+
+        if home_timeframe == "Weekly":
+            breakout_df, near_df = result["weekly_breakout"], result["weekly_near_breakout"]
+        else:
+            breakout_df, near_df = result["breakout"], result["near_breakout"]
+        st.caption(f"Completed {home_timeframe.lower()} candles · sorted by Breakout Quality Score")
+
+        combined = pd.concat([breakout_df, near_df], ignore_index=True)
+        if combined.empty:
+            st.info("No stocks matched your saved strategy in this scan.")
+        else:
+            combined = combined.sort_values("Quality Score", ascending=False, na_position="last").head(10).copy()
+            combined["Pattern"] = combined["Signal"] + " · " + combined["Resistance Period"].fillna("")
+            order = ["Ticker", "Company Name", "Current Price", "Change %", "Volume Ratio", "Pattern", "Result Date"]
+            col_config = {
+                "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+                "Company Name": st.column_config.TextColumn("Name"),
+                "Current Price": st.column_config.NumberColumn("Close", format=f"{currency}%.2f"),
+                "Change %": st.column_config.NumberColumn("Chg %", format="%.2f%%"),
+                "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+                "Pattern": st.column_config.TextColumn("Pattern"),
+                "Result Date": st.column_config.TextColumn("Result Date", width="small"),
+            }
+            event = st.dataframe(
+                combined, hide_index=True, width="stretch", column_config=col_config,
+                column_order=order, on_select="rerun", selection_mode="single-row", key="home_opportunities_table",
+            )
+            rows = event["selection"]["rows"]
+            if rows:
+                st.session_state.selected_ticker = combined.iloc[rows[0]]["Ticker"]
+
+        if st.button("View all results →", key="opp_view_all"):
+            st.session_state.nav_page = "Scanner"
+            st.rerun()
+
+    return breakout_df, near_df
+
+
+def render_watchlist_overview_card():
+    with st.container(border=True):
+        head_col, link_col = st.columns([2.6, 1.1])
+        with head_col:
+            st.markdown(
+                '<div class="card-header"><span class="badge-dot" style="background:#FFB020;"></span>'
+                f"⭐ My Watchlist ({len(watchlist_tickers)})</div>",
+                unsafe_allow_html=True,
+            )
+        with link_col:
+            if st.button("View all →", key="wl_view_all", width="stretch"):
+                st.session_state.nav_page = "Watchlist"
+                st.rerun()
+        st.caption("Track your favorite stocks at a glance.")
+
+        if not watchlist_tickers:
+            st.info("Your watchlist is empty. Add stocks from any stock's detail panel below.")
+            return
+        order = ["Ticker", "Company Name", "Status", "Current Price", "Change %", "RSI", "Volume Ratio"]
+        col_config = {
+            "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+            "Company Name": st.column_config.TextColumn("Name"),
+            "Status": st.column_config.TextColumn("Signal", width="small"),
+            "Current Price": st.column_config.NumberColumn("Price", format="%.2f"),
+            "Change %": st.column_config.NumberColumn("Chg %", format="%.2f%%"),
+            "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
+            "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+        }
+        event = st.dataframe(
+            watchlist_df, hide_index=True, width="stretch", column_config=col_config,
+            column_order=order, on_select="rerun", selection_mode="single-row", key="home_watchlist_table",
         )
+        rows = event["selection"]["rows"]
+        if rows:
+            st.session_state.selected_ticker = watchlist_df.iloc[rows[0]]["Ticker"]
 
-    html = '<div class="summary-row">'
-    html += (
-        '<div class="summary-card greet-card"><div class="greet-icon">👋</div><div>'
-        f'<div class="greet-title">{greeting},<br><b>Mallikarjun</b></div>'
-        f'<div class="greet-sub">Here are today\'s scan results from {config.MARKET_LABELS.get(market, market)}</div>'
-        "</div></div>"
-    )
-    html += _card("🗄️", "#2E5BFF22", "#4F7CFF", result["universe_size"], "Universe")
-    html += _card("✅", "#3ECF8E22", "#3ECF8E", result["scanned"], "Scanned OK")
-    html += _card("🚀", "#FF6B6B22", "#FF6B6B", len(result["breakout"]), "Breakouts (Daily)")
-    html += _card("🔭", "#B26BFF22", "#B26BFF", len(result["near_breakout"]), "Near Breakouts (Daily)")
-    html += (
-        '<div class="summary-card"><div class="metric-label">Market Status</div>'
-        f'<div class="metric-value" style="color:{status_col}; font-size:1.3rem;">'
-        f'{"OPEN" if market_is_open else "CLOSED"}</div>'
-        f'<div class="metric-sub">Auto-refreshes every {refresh_label}</div></div>'
-    )
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
-    st.caption(
-        f"Eligible: {result['eligible']} (passed the mandatory price filter) · "
-        f"Last scan: {last_updated} · Next scan: ~{next_refresh_label}"
-    )
-    st.caption(
-        f"📅 Weekly timeframe (same strategy, weekly-aggregated bars): "
-        f"{len(result['weekly_breakout'])} breakouts, {len(result['weekly_near_breakout'])} near breakouts — "
-        "see the Timeframe toggle below."
-    )
+
+def render_universe_snapshot_card():
+    with st.container(border=True):
+        st.markdown(
+            '<div class="card-header"><span class="badge-dot" style="background:#4F7CFF;"></span>'
+            "🥧 Universe Snapshot</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(f"Among {result['scanned']} successfully scanned stocks in this universe.")
+        total = result["advances"] + result["declines"] + result["unchanged"]
+        rows = [
+            ("Advancing", result["advances"], "#3ECF8E"),
+            ("Declining", result["declines"], "#FF6B6B"),
+            ("Unchanged", result["unchanged"], "#8FA3C0"),
+        ]
+        rows_html = ""
+        for label, count, color in rows:
+            pct = (count / total * 100) if total else 0
+            rows_html += (
+                f'<div class="sector-row"><span class="sector-label">{label}</span>'
+                f'<span class="sector-bar-track"><span class="sector-bar-fill" '
+                f'style="width:{max(pct, 2):.0f}%; background:{color};"></span></span>'
+                f'<span class="sector-count">{count} ({pct:.0f}%)</span></div>'
+            )
+        st.markdown(rows_html, unsafe_allow_html=True)
+        st.caption("Computed from today's actually-scanned tickers, not the full exchange.")
+
+
+def render_recent_scan_history_card():
+    with st.container(border=True):
+        head_col, link_col = st.columns([2.6, 1.1])
+        with head_col:
+            st.markdown(
+                '<div class="card-header"><span class="badge-dot" style="background:#B26BFF;"></span>'
+                "🕐 Recent Scans</div>",
+                unsafe_allow_html=True,
+            )
+        with link_col:
+            if st.button("View all scans →", key="hist_view_all", width="stretch"):
+                st.session_state.nav_page = "Scan History"
+                st.rerun()
+        st.caption("Your latest scan activity.")
+
+        entries = scan_history.load()
+        if not entries:
+            st.caption("No scans recorded yet.")
+            return
+        recent = list(reversed(entries))[:5]
+        hist_df = pd.DataFrame(recent)
+        # Every logged entry is a scan that actually finished (record() only
+        # runs after a scan completes) -- "Completed" is a true label here,
+        # not an invented status.
+        hist_df["Status"] = "✅ Completed"
+        hist_df["Matches"] = hist_df["breakouts"].fillna(0) + hist_df["near_breakouts"].fillna(0)
+        hist_df = hist_df[["date", "market", "Status", "Matches"]]
+        hist_df.columns = ["Scan Time", "Universe", "Status", "Matches"]
+        st.dataframe(hist_df, hide_index=True, width="stretch")
 
 
 def render_market_overview():
@@ -659,100 +1046,6 @@ def render_sector_summary():
             f'<span class="sector-count">{count}</span></div>'
         )
     st.markdown(rows_html, unsafe_allow_html=True)
-
-
-def _signal_pill(signal_text: str) -> str:
-    cls = "pill-near" if "Near" in signal_text else "pill-breakout"
-    return f'<span class="signal-pill {cls}">{signal_text}</span>'
-
-
-def render_preview_table_html(df: pd.DataFrame, title: str, icon: str, nav_target: str):
-    head_l, head_r1, head_r2 = st.columns([4.2, 1.2, 0.6])
-    head_l.markdown(f"##### {icon} {title} ({len(df)})")
-    with head_r1:
-        if st.button(f"View All ({len(df)})", key=f"viewall_{title}", width="stretch"):
-            st.session_state.nav_page = nav_target
-            st.rerun()
-    with head_r2:
-        if not df.empty:
-            with st.popover("⬇️", width="stretch"):
-                stamp = time.strftime("%Y%m%d_%H%M%S")
-                st.download_button(
-                    "CSV", _to_csv_bytes(df), file_name=f"{title}_{stamp}.csv",
-                    mime="text/csv", key=f"prev_csv_{title}", width="stretch",
-                )
-                st.download_button(
-                    "Excel", _to_excel_bytes({title[:31]: df}), file_name=f"{title}_{stamp}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key=f"prev_xlsx_{title}", width="stretch",
-                )
-    if df.empty:
-        st.info("No candidates right now.")
-        return
-
-    # Preview tables live in a narrower column (see the [2.1, 1] split on the
-    # Home page), so this deliberately shows fewer columns than the full
-    # Scanner table -- just enough to act on at a glance, so it fits without
-    # horizontal scrolling. Rank/Distance/Vol Ratio/RSI/Quality Score are
-    # still shown in the full Scanner-page table (one click away via
-    # "View All"); Buy/Support/Resistance/Stop Loss stay on every table per
-    # the documented requirement.
-    rows_html = ""
-    for _, r in df.iterrows():
-        star = "⭐" if r["Ticker"] in watchlist_tickers else "☆"
-        company = (r.get("Company Name") or r["Ticker"])
-        buy_lvl = f"{currency}{r['Buy Level']:.2f}" if pd.notna(r.get("Buy Level")) else "N/A"
-        support_lvl = f"{currency}{r['Support Level']:.2f}" if pd.notna(r.get("Support Level")) else "N/A"
-        stop_lvl = f"{currency}{r['Stop Loss']:.2f}" if pd.notna(r.get("Stop Loss")) else "N/A"
-        rows_html += (
-            "<tr>"
-            f"<td class='ticker-link'>{r['Ticker'].replace('.NS', '')}</td>"
-            f"<td class='ellipsis-cell' title='{company}'>{company}</td>"
-            f"<td>{currency}{r['Current Price']:.2f}</td>"
-            f"<td>{buy_lvl}</td>"
-            f"<td>{currency}{r['Resistance Level']:.2f}</td>"
-            f"<td>{support_lvl}</td>"
-            f"<td>{stop_lvl}</td>"
-            f"<td>{_signal_pill(r['Signal'])}</td>"
-            f"<td>{star}</td>"
-            "</tr>"
-        )
-    table_html = (
-        '<div class="preview-table-wrap"><table class="html-table"><thead><tr>'
-        "<th>Ticker</th><th>Company</th><th>LTP</th><th>Buy</th><th>Resistance</th>"
-        "<th>Support</th><th>Stop Loss</th><th>Signal</th><th>Watching</th>"
-        f"</tr></thead><tbody>{rows_html}</tbody></table></div>"
-    )
-    st.markdown(table_html, unsafe_allow_html=True)
-
-    # The ⭐/☆ in the "Watching" column above is a plain HTML cell (st.markdown
-    # has no click handler) -- it's a status indicator, not a button. This
-    # popover is the actual toggle: one full-width, fully-labeled button per
-    # ticker, so there's always room for the label (a row of side-by-side
-    # buttons got squeezed down to icon-only on narrower screens/more rows,
-    # which read as broken/unclickable).
-    pick_col, manage_col = st.columns([3, 1.3])
-    with manage_col:
-        with st.popover("⭐ Manage Watchlist", width="stretch"):
-            for ticker in df["Ticker"].tolist():
-                short = ticker.replace(".NS", "")
-                is_watched = ticker in watchlist_tickers
-                label = f"⭐ Remove {short} from Watchlist" if is_watched else f"☆ Add {short} to Watchlist"
-                if st.button(label, key=f"prev_toggle_{title}_{ticker}", width="stretch"):
-                    if is_watched:
-                        watchlist.remove(ticker)
-                    else:
-                        watchlist.add(ticker)
-                    st.rerun()
-
-    display_options = [t.replace(".NS", "") for t in df["Ticker"].tolist()]
-    idx_map = dict(zip(display_options, df["Ticker"].tolist()))
-    with pick_col:
-        chosen_display = st.selectbox(
-            "🔎 View details for", display_options, key=f"pick_{title}", label_visibility="collapsed",
-        )
-    if chosen_display:
-        st.session_state.selected_ticker = idx_map[chosen_display]
 
 
 def render_detail_panel():
@@ -1067,47 +1360,34 @@ def render_footer():
 # ---------------------------------------------------------------------------
 
 if nav_page == "Home":
-    render_summary_cards()
+    render_home_header()
     st.write("")
-    render_scan_parameters(button_key="run_scan_home")
+    render_home_top_controls()
+    st.write("")
+    render_home_summary_tiles()
     st.write("")
 
-    home_timeframe = st.radio(
-        "Timeframe", ["Daily", "Weekly"], horizontal=True, key="home_timeframe",
-        help="Weekly re-runs the same strategy on weekly-aggregated bars (10/40-week SMA trend "
-             "template instead of daily 50/200) -- a higher-timeframe confirmation view.",
-    )
-    if home_timeframe == "Weekly":
-        active_breakout, active_near = result["weekly_breakout"], result["weekly_near_breakout"]
-    else:
-        active_breakout, active_near = result["breakout"], result["near_breakout"]
+    opp_col, wl_col = st.columns(2)
+    with opp_col:
+        active_breakout, active_near = render_latest_opportunities_card()
+    with wl_col:
+        render_watchlist_overview_card()
 
     # Default to the #1 breakout (or #1 near-breakout) candidate so the
     # analysis section below is never empty, matching a dashboard-summary
-    # feel -- the user can still pick any other row via the dropdowns.
+    # feel -- the user can still pick any other row via the tables above.
     if not st.session_state.selected_ticker:
         if not active_breakout.empty:
             st.session_state.selected_ticker = active_breakout.iloc[0]["Ticker"]
         elif not active_near.empty:
             st.session_state.selected_ticker = active_near.iloc[0]["Ticker"]
 
-    left, right = st.columns([2.1, 1])
-    with left:
-        render_preview_table_html(
-            active_breakout.head(5), f"Today's Top Breakout Candidates — {home_timeframe}", "🚀", "Scanner",
-        )
-        st.write("")
-        render_preview_table_html(
-            active_near.head(5), f"Near Breakout Candidates — {home_timeframe}", "🔭", "Scanner",
-        )
-
-    with right:
-        with st.container(border=True):
-            render_market_overview()
-        st.write("")
-        st.write("")
-        with st.container(border=True):
-            render_sector_summary()
+    st.write("")
+    snap_col, hist_col = st.columns(2)
+    with snap_col:
+        render_universe_snapshot_card()
+    with hist_col:
+        render_recent_scan_history_card()
 
     st.divider()
     st.markdown("### 🔎 Selected Stock Analysis")
@@ -1120,7 +1400,8 @@ if nav_page == "Home":
 # ---------------------------------------------------------------------------
 
 elif nav_page == "Scanner":
-    render_scan_parameters(button_key="run_scan_scanner")
+    with st.container(border=True):
+        render_strategy_summary_bar(show_run_button=True, run_button_key="run_scan_scanner")
     st.write("")
 
     scanner_timeframe = st.radio(
@@ -1152,14 +1433,14 @@ elif nav_page == "Scanner":
     with tab_b:
         df_b = _sector_filtered(active_breakout)
         if df_b.empty:
-            st.info(f"No {scanner_timeframe.lower()} breakout signals right now.")
+            st.info("No stocks matched your saved strategy in this scan.")
         else:
             _export_buttons(df_b, f"breakout_{scanner_timeframe.lower()}_{market}", "breakout")
             _select_from_table(df_b, _FULL_COLUMN_ORDER, key="scanner_breakout_table")
     with tab_n:
         df_n = _sector_filtered(active_near)
         if df_n.empty:
-            st.info(f"No {scanner_timeframe.lower()} near-breakout signals right now.")
+            st.info("No stocks matched your saved strategy in this scan.")
         else:
             _export_buttons(df_n, f"near_breakout_{scanner_timeframe.lower()}_{market}", "near")
             _select_from_table(df_n, _FULL_COLUMN_ORDER, key="scanner_near_table")
@@ -1181,6 +1462,16 @@ elif nav_page == "Scanner":
         "computed technical reference points, not investment advice. Breakout / Near Breakout are strategy "
         "classifications, not guaranteed buy/sell recommendations."
     )
+
+    st.divider()
+    ov_col, sec_col = st.columns(2)
+    with ov_col:
+        with st.container(border=True):
+            render_market_overview()
+    with sec_col:
+        with st.container(border=True):
+            render_sector_summary()
+
     st.divider()
     render_detail_panel()
     render_footer()
@@ -1255,8 +1546,11 @@ elif nav_page == "Scan History":
 
 elif nav_page == "Strategy Settings":
     st.markdown("### ⚙️ Strategy Settings")
-    st.caption("These controls drive every scan across the app — the same settings shown on Home/Scanner.")
-    render_scan_parameters(button_key="run_scan_settings")
+    st.caption(
+        "These controls drive every scan across the app. Home and Scanner only show a compact summary "
+        "of whatever is saved here — edit and Save below to change it."
+    )
+    render_strategy_settings_form()
     st.write("")
     st.markdown("##### Fixed rules (not adjustable from the UI)")
     st.markdown(

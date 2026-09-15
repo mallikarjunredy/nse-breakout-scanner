@@ -127,6 +127,10 @@ def _evaluate_ticker(
     )
 
     tf_label = "Weekly" if is_weekly else "Daily"
+    prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else None
+    change_pct = ((price - prev_close) / prev_close * 100) if prev_close else None
+    result_date = df.index[-1].strftime("%Y-%m-%d")
+
     why = []
     if category == "Breakout":
         why.append(
@@ -153,6 +157,8 @@ def _evaluate_ticker(
         "Signal": "🚀 Breakout" if category == "Breakout" else "👀 Near Breakout",
         "Timeframe": tf_label,
         "Current Price": round(price, 2),
+        "Change %": round(change_pct, 2) if change_pct is not None else None,
+        "Result Date": result_date,
         "Volume Ratio": round(float(vol_ratio), 2),
         "RSI": round(float(rsi), 1),
         "Quality Score": quality_score,
@@ -215,6 +221,9 @@ def evaluate_watchlist_ticker(
         return {"Ticker": ticker, "Status": "⚠️ No data", "Reason": "Not enough price history"}
 
     price = float(df["Close"].iloc[-1])
+    prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else None
+    change_pct = ((price - prev_close) / prev_close * 100) if prev_close else None
+    result_date = df.index[-1].strftime("%Y-%m-%d")
     uptrend = indicators.is_uptrend(df)
     rsi = indicators.compute_rsi(df["Close"]).iloc[-1]
     vol_ratio = indicators.compute_volume_ratio(df["Volume"])
@@ -269,6 +278,8 @@ def evaluate_watchlist_ticker(
         "Status": status,
         "Reason": "Meets all scan criteria" if not reasons else "Missing: " + ", ".join(reasons),
         "Current Price": round(price, 2),
+        "Change %": round(change_pct, 2) if change_pct is not None else None,
+        "Result Date": result_date,
         "RSI": round(float(rsi), 1) if not pd.isna(rsi) else None,
         "Volume Ratio": round(float(vol_ratio), 2) if not pd.isna(vol_ratio) else None,
         "Buy Level": round(buy_level, 2) if buy_level is not None else None,
@@ -289,8 +300,8 @@ def get_watchlist_data(
     """Builds a live snapshot table for arbitrary watchlisted tickers,
     independent of any market's scan results.
     """
-    columns = ["Ticker", "Company Name", "Sector", "Status", "Current Price", "P/E Ratio",
-               "Volume Ratio", "RSI", "Buy Level", "Stop Loss", "Resistance Level",
+    columns = ["Ticker", "Company Name", "Sector", "Status", "Current Price", "Change %", "Result Date",
+               "P/E Ratio", "Volume Ratio", "RSI", "Buy Level", "Stop Loss", "Resistance Level",
                "52W High", "Support Level", "Reason"]
     if not tickers:
         return pd.DataFrame(columns=columns)
@@ -474,9 +485,10 @@ def scan_market(
     if progress_callback:
         progress_callback(0.95, "Ranking results...")
 
-    columns = ["Ticker", "Company Name", "Sector", "Signal", "Timeframe", "Current Price", "P/E Ratio",
-               "Volume Ratio", "RSI", "Quality Score", "Buy Level", "Stop Loss", "Resistance Period",
-               "Resistance Level", "52W High", "% From Resistance", "Support Level", "Why Qualified"]
+    columns = ["Ticker", "Company Name", "Sector", "Signal", "Timeframe", "Current Price", "Change %",
+               "Result Date", "P/E Ratio", "Volume Ratio", "RSI", "Quality Score", "Buy Level", "Stop Loss",
+               "Resistance Period", "Resistance Level", "52W High", "% From Resistance", "Support Level",
+               "Why Qualified"]
 
     def _build_table(candidates, category):
         rows = sorted(
@@ -494,6 +506,13 @@ def scan_market(
     weekly_breakout_df = _build_table(weekly_candidates, "Breakout")
     weekly_near_df = _build_table(weekly_candidates, "Near Breakout")
 
+    # The date of the most recent daily candle actually used, across the
+    # universe -- distinct from "when the scan ran" (see scan_time in
+    # app.py). Almost all tickers share the same latest trading day, so the
+    # max across the universe is a reliable single "as of" date to show.
+    last_dates = [df.index[-1].date() for df in history.values() if len(df)]
+    data_asof_date = max(last_dates) if last_dates else None
+
     if progress_callback:
         progress_callback(1.0, "Done.")
 
@@ -510,4 +529,5 @@ def scan_market(
         "unchanged": unchanged,
         "min_price": min_price,
         "source": source,
+        "data_asof_date": data_asof_date,
     }

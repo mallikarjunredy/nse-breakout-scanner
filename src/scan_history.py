@@ -2,10 +2,14 @@
 see what was scanned and when, across sessions -- not just the latest run.
 """
 
+import datetime
 import json
 import time
+from zoneinfo import ZoneInfo
 
 from . import config
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 _PATH = config.DATA_DIR / "scan_history.json"
 
@@ -26,13 +30,19 @@ def record(market_label: str, result: dict) -> None:
     most recent config.SCAN_HISTORY_MAX_ENTRIES entries.
     """
     entries = load()
+    now_ts = time.time()
+    universe_size = result.get("universe_size") or 0
+    scanned = result.get("scanned") or 0
     entries.append({
-        "timestamp": time.time(),
-        "date": time.strftime("%d %b %Y %H:%M:%S"),
+        "timestamp": now_ts,
+        # IST explicitly -- the server's local time (e.g. a cloud host in
+        # UTC) is not necessarily IST, and NSE data is IST-relevant.
+        "date": datetime.datetime.fromtimestamp(now_ts, tz=_IST).strftime("%d %b %Y %I:%M %p IST"),
         "market": market_label,
         "universe_size": result.get("universe_size"),
         "scanned": result.get("scanned"),
         "eligible": result.get("eligible"),
+        "failures": max(0, universe_size - scanned),
         "breakouts": len(result.get("breakout", [])),
         "near_breakouts": len(result.get("near_breakout", [])),
         "weekly_breakouts": len(result.get("weekly_breakout", [])),

@@ -6,9 +6,10 @@ NSE (via the Nifty Total Market list), or the US S&P 500 as a stand-in for
 through a resistance level, with confirming volume and momentum. Results
 refresh automatically and are split into "Breakout" and "Near Breakout"
 ranked tables, plus a persistent Watchlist, a stock-search box, market
-overview, sector breakdown, and scan history. The sidebar's "🎯 Scan
-Parameters" expander lets the user adjust every threshold live, without
-editing code.
+overview, sector breakdown, and scan history. Every strategy threshold is
+edited on the dedicated "⚙️ Strategy Settings" page (via a Save/Reset
+draft flow — see Architecture below); Home and Scanner only show a
+compact read-only summary of whatever is currently saved there.
 
 **Data source**: `yfinance` (Yahoo Finance) only. There is no official NSE
 real-time feed integration. The UI always labels this explicitly ("📡 Data
@@ -52,43 +53,81 @@ small built-in fallback list is used instead — see `src/universe.py`.
   existing `st.session_state`-based scan/watchlist caching working
   unchanged, with none of the cross-page widget-state subtlety that
   routing would introduce. Pages: Home (dashboard summary), Scanner (full
-  Breakout/Near Breakout/Watchlist tables + sector filter), Watchlist,
-  Stock Analysis (search-driven detail view), Scan History, Strategy
-  Settings, Exports, Help & Support. The header bar (logo, search box,
-  market status/date badges), the scan/watchlist fetch, and
-  `render_scan_parameters()` / `render_detail_panel()` / `render_footer()`
-  all run before/independent of the page routing, so every page can use
-  them. Auto-refreshes every `config.AUTOREFRESH_INTERVAL_MS` (currently
-  5 hours) via `streamlit-autorefresh`.
-- The "Scan Parameters" widgets use a **fixed set of `st.session_state`
-  keys** (`param_market_label`, `param_rsi_range`, `param_volume_multiplier`,
-  `param_near_pct`, `param_min_price`, `param_breakout_periods`), pre-seeded
-  with defaults at the top of the script. `render_scan_parameters()` is
-  called from multiple pages (Home, Scanner, Strategy Settings) using
-  those same keys -- safe because only one page's branch actually executes
-  per script run, so there's never a duplicate-widget-id collision. Do
-  NOT pass `value=`/`index=`/`default=` alongside a `key=` that's already
-  pre-seeded in `st.session_state` -- Streamlit will ignore/warn about the
-  conflicting default.
-- Home's "Top Breakout"/"Near Breakout" preview tables and the summary
-  cards are rendered as hand-built HTML (`render_preview_table_html`,
-  `render_summary_cards`) rather than `st.dataframe`/`st.metric` --
-  needed for colored signal pills, a colored ticker style, and star
-  watch-indicators, none of which `st.dataframe` can style per-cell. This
-  sacrifices native row-click selection on the preview tables specifically
-  (HTML has no Streamlit interactivity); a small selectbox below each
-  preview table lets the user pick which of those rows to inspect (and
-  each preview table has its own "⬇️" export popover, same as the full
-  tables), and the *full* Scanner-page tables still use `st.dataframe`
-  with real row-selection, unchanged. Every results table -- Home
-  previews, Scanner's Breakout/Near Breakout/Watchlist, and the
-  Watchlist page -- shows Buy Level, Support Level, Resistance Level, and
-  Stop Loss; there's no separate "Exports" nav page (removed -- the
-  per-table download icons plus a small "Export All" button in the
-  sidebar cover it without a dedicated page). The selected-stock detail
-  panel is a 3-column layout (chart+tabs | stock info card | Why-
-  Qualified + Quality Score cards) built the same way, matching a
-  supplied reference screenshot.
+  Breakout/Near Breakout/Watchlist tables + sector filter + Market
+  Overview/Sector Breakout Count), Watchlist, Stock Analysis (search-driven
+  detail view), Scan History, Strategy Settings, Help & Support (there's
+  no separate "Exports" page -- per-table download icons plus a sidebar
+  "Export All" button cover it). The header bar (logo, search box, market
+  status/date badges), the scan/watchlist fetch, and
+  `render_detail_panel()` / `render_footer()` all run before/independent
+  of the page routing, so every page can use them. Auto-refreshes every
+  `config.AUTOREFRESH_INTERVAL_MS` (currently 5 hours) via
+  `streamlit-autorefresh`.
+- **Strategy is a draft/save pair, not live-bound widgets.** Every
+  strategy control (Market, Breakout Period, Min Volume Ratio, RSI Range,
+  Near-Breakout %, Min Price) has two `st.session_state` keys: `param_*`
+  (the applied/saved value that `scan_market()` and the scan cache key
+  actually read -- unchanged mechanism from before this split existed)
+  and `draft_*` (what the Strategy Settings page's widgets are bound to).
+  Editing a widget on that page only changes `draft_*`; nothing reaches
+  `param_*` until "💾 Save Settings" (`_save_draft_strategy()`) copies
+  draft -> param, gated by `_validate_draft_strategy()` (non-empty
+  Breakout Period, RSI min <= max, Min Price >= the mandatory floor, Vol
+  >= 1.0x -- most of these are also enforced by the widgets' own
+  `min_value`/`max_value`, so the checks are defence-in-depth more than
+  the only line of defense). `_strategy_is_dirty()` compares draft vs
+  param (by value, or by set for the multiselect) to show an "unsaved
+  changes" notice on both the Settings page and the Home/Scanner compact
+  summary bar (`render_strategy_summary_bar()`). Home and Scanner never
+  render the editable form -- only this read-only summary plus an
+  "✏️ Edit Strategy" button that navigates to Strategy Settings.
+  **Bug class this caused once:** "↩️ Reset to Saved" cannot write
+  `draft_*` directly from inside its own button handler and then
+  `st.rerun()` -- by that point in the same script run, the draft_*-keyed
+  widgets above it have already instantiated, and Streamlit raises
+  `StreamlitWidgetAlreadyInstantiatedError` on any further write to that
+  key in the same run. The fix: the button only sets a
+  `_pending_strategy_reset` flag and reruns; the actual draft<-param copy
+  happens at the top of the script (right after the initial draft
+  seeding), *before* any widget with those keys exists for that run. Any
+  future "reset a widget's value from a button" pattern needs this same
+  flag-then-rerun shape, not a direct write from the click handler.
+  Home's Universe toggle is the one exception that writes `param_*`
+  directly (immediately, no Save gate) -- see below.
+- Home's Universe control (`render_home_top_controls()`) is a 2-option
+  segmented button pair (Nifty 500 / All Stocks) that writes
+  `param_market_label` (and mirrors the same value into
+  `draft_market_label`, so Strategy Settings doesn't show a stale draft
+  afterwards) immediately, then `st.rerun()`s -- deliberately NOT part of
+  the draft/Save-gated strategy above, since switching universe is a
+  primary navigation action, not a strategy edit. The full Market dropdown
+  (all 3 markets, including NYSE) still lives in Strategy Settings for
+  anyone who needs NYSE; Home's control only offers the two NSE
+  universes and shows a small note instead of the toggle when the saved
+  market is NYSE.
+- Home's cards (`render_latest_opportunities_card()`, which owns its own
+  Daily/Weekly toggle, `render_watchlist_overview_card()`,
+  `render_universe_snapshot_card()`, `render_recent_scan_history_card()`)
+  use plain `st.dataframe` inside `st.container(border=True)`, not
+  hand-built HTML tables -- an earlier HTML-table version of these
+  preview tables (`render_preview_table_html`, since removed) hit two
+  real bugs from static, unstyleable-by-Streamlit HTML: it needed a
+  fixed, narrow column set to avoid horizontal scrolling, and its
+  ⭐/☆ watch-indicator cells looked clickable but weren't (`st.markdown`
+  has no click handler), which read as broken to a real user. `st.dataframe`
+  with `on_select="rerun"` avoids both -- native row-selection, and no HTML
+  cell pretending to be a button. The tradeoff, matching the "Known
+  limitations" section below: no per-cell pill coloring, just an emoji-
+  prefixed Signal/Status column. Every results table -- Home, Scanner's
+  Breakout/Near Breakout/Watchlist, and the Watchlist page -- still shows
+  Buy Level, Support Level, Resistance Level, and Stop Loss (Home's
+  Latest Opportunities card is the deliberate exception -- it shows a
+  different, general-purpose column set per its own spec: Symbol, Name,
+  Close, Change %, Volume Ratio, Pattern, Result Date; the trade-level
+  columns are one click away in Scanner). The selected-stock detail panel
+  is a 3-column layout (chart+tabs | stock info card | Why-Qualified +
+  Quality Score cards) built the same way, matching a supplied reference
+  screenshot.
 - `st.container(border=True)` (Market Overview / Sector Breakout Count on
   Home) is styled via `div[data-testid="stVerticalBlockBorderWrapper"]`
   in the global CSS -- that's Streamlit's actual test-id for a bordered
@@ -125,8 +164,9 @@ small built-in fallback list is used instead — see `src/universe.py`.
   RSI/volume/near-breakout/min-price thresholds, refresh cadence, quality
   score weights, benchmark index tickers, market hours). Change values
   here rather than hardcoding elsewhere. Most of these are *defaults*
-  only — the sidebar's Scan Parameters controls override them per scan
-  (see `scan_market`'s keyword args in `src/scanner.py`); the scan cache
+  only — the Strategy Settings page's saved (`param_*`) values override
+  them per scan (see `scan_market`'s keyword args in `src/scanner.py`);
+  the scan cache
   key includes every one of them, so changing any control triggers a
   fresh scan instead of showing stale results.
 - `src/universe.py` — loads and caches the ticker universe: Nifty 500 and
@@ -145,7 +185,17 @@ small built-in fallback list is used instead — see `src/universe.py`.
   `evaluate_watchlist_ticker` / `get_watchlist_data` (always returns a
   row, even for non-qualifying stocks, with a Status + Reason) and
   `search_ticker` (on-demand lookup of any single ticker, in or out of
-  the current universe, reusing the same evaluation logic).
+  the current universe, reusing the same evaluation logic). Every row
+  (scan result, watchlist row, or search result) also carries `Change %`
+  (vs. the prior close in the same OHLCV data -- `None` if fewer than 2
+  bars) and `Result Date` (that ticker's own last-bar date, `YYYY-MM-DD`)
+  -- purely additive fields, computed from data already downloaded, that
+  don't touch any existing filter/threshold logic. `scan_market()`'s
+  return dict also carries `data_asof_date`: the max last-bar date across
+  the whole universe's downloaded history, used by Home to show "Price
+  data as of" separately from "Scan completed at" (see below) -- almost
+  every ticker shares the same latest trading day, so a single max date
+  is a reliable "as of" label without per-ticker granularity.
 - `src/detail.py` — on-demand deep-dive info for a single ticker (company
   fundamentals via `.info`, plus price history at a chosen period). Kept
   separate from `scanner.py` since these are slow per-ticker calls that
@@ -168,7 +218,16 @@ small built-in fallback list is used instead — see `src/universe.py`.
 - `src/scan_history.py` — persistent log of past scans
   (`data/scan_history.json`, capped at `config.SCAN_HISTORY_MAX_ENTRIES`),
   written once per *actual* fresh scan (not on cache-hit reruns) via
-  `record()`.
+  `record()`. Each entry's `date` field is formatted in IST explicitly
+  (`datetime.fromtimestamp(ts, tz=ZoneInfo("Asia/Kolkata"))`) rather than
+  the server's local time -- important now that the app runs on a cloud
+  host (Streamlit Community Cloud, UTC) where local-time formatting would
+  silently show the wrong hour for NSE data. Also records `failures`
+  (`universe_size - scanned`) so Home/Scan History can show how many
+  tickers in the universe had no usable price data, without recomputing
+  it from two other fields every time. Older entries recorded before this
+  field existed don't have it -- callers must treat a missing `failures`
+  key as unknown, not zero.
 - `src/market_overview.py` — fetches the benchmark index snapshot (Nifty
   50 for NSE markets, S&P 500 for NYSE) for the Market Overview section.
   Advance/Decline counts are NOT computed here — they come from
@@ -198,16 +257,84 @@ and `compute_quality_score` all accept optional `sma_fast`/`sma_slow`/
 `lookbacks` overrides for this (defaulting to the daily config constants,
 so existing daily-only callers are unaffected).
 
-`app.py` has a "Timeframe" radio (Daily/Weekly) on both the Home and
-Scanner pages that switches which pair of tables is displayed; the
-summary cards always show daily counts (with weekly counts as a
-secondary caption underneath), since they render before the toggle
-exists on the page. The detail panel's `combined` lookup (for the
-selected-stock analysis) includes all four tables plus the watchlist, so
-a stock that qualifies only on the weekly timeframe still resolves
-correctly. The Watchlist/search-box evaluation path
-(`evaluate_watchlist_ticker`/`search_ticker`) is daily-only for now --
-a deliberate scope decision, not a bug.
+Scanner has a page-level "Timeframe" radio (Daily/Weekly) that switches
+which pair of tables is displayed. Home's Daily/Weekly toggle instead
+lives *inside* the Latest Opportunities card itself
+(`render_latest_opportunities_card()`, a Daily/Weekly button pair bound
+to `st.session_state.home_timeframe`) since only that one card's content
+depends on it; the summary tiles above it always show daily counts
+(with weekly counts as a secondary caption underneath), since they
+render before the toggle exists on the page. The detail panel's
+`combined` lookup (for the selected-stock analysis) includes all four
+tables plus the watchlist, so a stock that qualifies only on the weekly
+timeframe still resolves correctly. The Watchlist/search-box evaluation
+path (`evaluate_watchlist_ticker`/`search_ticker`) is daily-only for now
+-- a deliberate scope decision, not a bug.
+
+## Home page layout
+
+Home is an informative dashboard, not a strategy-editing form -- every
+strategy control lives on Strategy Settings (see Architecture above);
+Home only shows results and a compact, read-only summary of whatever
+strategy is currently saved. Top to bottom:
+
+1. `render_home_header()` -- a compact hero line ("Your Market Overview" /
+   "Welcome back, Mallikarjun") plus a meta line showing the data source,
+   the *scan* timestamp and the underlying *price data* date **separately**
+   and both in IST (`ZoneInfo("Asia/Kolkata")`, not the server's local
+   time -- see the scan_history.py note above for why that distinction
+   matters on a cloud host). If the universe's last daily candle's date
+   equals today's IST date *and* the market is currently open, an inline
+   warning notes that candle may still be forming, rather than silently
+   presenting an in-progress session as a completed daily result. Also
+   the one place that shows a hard error if `result["scanned"] == 0`
+   (the scan couldn't get any price data at all) or a stale-data caption
+   if the cache TTL has already elapsed.
+2. `render_home_top_controls()` -- one bordered row: the 2-option
+   Universe toggle (see Architecture above), a static "mandatory
+   condition" pill (`Closing price > ₹100`, or "No mandatory price floor"
+   for NYSE), a prominent "▶ Open Scanner" button (navigates to Scanner --
+   does NOT itself trigger a scan), and an "Active strategy" mini-panel
+   (a fixed name, "Breakout Scanner" -- the app has one strategy
+   template, not multiple named presets, so this deliberately doesn't
+   invent a name that implies otherwise) with "✏️ Edit Strategy" and a
+   "▶️ Run Scan" shortcut (sets `_trigger_scan` like the old in-form
+   button did). The full parameter detail (RSI range, volume multiplier,
+   near %, periods, universe size, last-scanned time) and the "unsaved
+   changes" notice render as a caption below that row.
+3. `render_home_summary_tiles()` -- four bordered tiles (Eligible,
+   Scanned OK, Breakouts, Near Breakouts); the last two are clickable
+   ("View →") to Scanner, the first two aren't (there's no dedicated
+   list view for "just eligible" or "just scanned" stocks to link to --
+   inventing one would be scope creep with no real backing data).
+4. A 2-column row: `render_latest_opportunities_card()` (top 10 by
+   Quality Score across breakout+near-breakout for the card's own
+   Daily/Weekly selection; columns are Symbol/Name/Close/Change %/Volume
+   Ratio/Pattern/Result Date -- a general "what happened" view, not the
+   trade-level Buy/Support/Resistance/Stop-Loss columns those tables show
+   elsewhere) and `render_watchlist_overview_card()` (latest price/change/
+   Status for every watchlisted ticker). Both use `st.dataframe` with
+   `on_select="rerun"` to drive the shared detail panel below; row
+   selection is the same "click a row -> see it in Selected Stock
+   Analysis" pattern used everywhere else in the app, not a separate page
+   navigation -- there's no dedicated per-row "Add to Watchlist" button
+   on these two cards specifically, since the detail panel's existing
+   Watch/Unwatch button (reachable by selecting any row) already covers it.
+5. A second 2-column row: `render_universe_snapshot_card()` (Advances/
+   Declines/Unchanged as horizontal bars, reusing the same
+   `.sector-row`/`.sector-bar-track` CSS built for Sector Breakout Count,
+   just with per-bar color overrides instead of that class's default
+   gradient) and `render_recent_scan_history_card()` (last 5
+   `scan_history` entries, showing Scan Time/Universe/Status/Matches --
+   `Status` is always "✅ Completed" since `record()` only ever logs a
+   scan that finished; there is no partial/failed entry type to show yet).
+6. The usual divider + "🔎 Selected Stock Analysis" + `render_detail_panel()`.
+
+Market Overview (benchmark index + Advances/Declines/Unchanged as
+`st.metric`) and Sector Breakout Count moved from Home to the bottom of
+the Scanner page (same two functions, `render_market_overview()` /
+`render_sector_summary()`, unchanged -- just relocated) once Home's own
+Universe Snapshot card took over showing the advance/decline split.
 
 ## Signal definitions
 
@@ -370,9 +497,10 @@ platforms or machines that don't need it.
 - The Watchlist/search-box "not yet applied to a restricted Breakout
   Period" — `evaluate_watchlist_ticker`, `get_watchlist_data`, and
   `search_ticker` always check resistance across the full 5D-3Y window
-  set, regardless of the sidebar's "Breakout Period" selection (which
-  only narrows the main Breakout/Near Breakout scan). This is a
-  deliberate scope decision, not a bug — flag it if you want it unified.
+  set, regardless of the saved "Breakout Period" selection on Strategy
+  Settings (which only narrows the main Breakout/Near Breakout scan).
+  This is a deliberate scope decision, not a bug — flag it if you want
+  it unified.
 - No inline per-row "Watchlist Action" button in the result tables
   (would require switching from `st.dataframe` to `st.data_editor`,
   a bigger change with more risk of breaking existing selection/export
