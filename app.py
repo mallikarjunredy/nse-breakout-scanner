@@ -320,6 +320,7 @@ breakout_periods = st.session_state.param_breakout_periods or list(config.RESIST
 min_price_input = st.session_state.param_min_price if market in ("NSE", "NSE_ALL") else None
 currency = "₹" if market in ("NSE", "NSE_ALL") else "$"
 exch_name, market_is_open = _market_status(market)
+watchlist_tickers = watchlist.load()
 
 
 # ---------------------------------------------------------------------------
@@ -345,15 +346,21 @@ with h_mid:
         )
         search_submitted = s2.form_submit_button("Search", width="stretch")
 with h_right:
-    st.markdown(
-        f'<div style="text-align:right;">'
-        f'<span class="status-badge" style="color:{status_color}; border-color:{status_color}66; '
-        f'background:{status_color}1F;"><span class="dot" style="background:{status_color};"></span>'
-        f'Market: {"OPEN" if market_is_open else "CLOSED"} — {exch_name}</span><br>'
-        f'<span class="meta-text">{st.session_state.param_market_label}<br>Data Date: {now_str}</span>'
-        f"</div>",
-        unsafe_allow_html=True,
-    )
+    badge_col, watch_btn_col = st.columns([2.4, 1.3])
+    with badge_col:
+        st.markdown(
+            f'<div style="text-align:right;">'
+            f'<span class="status-badge" style="color:{status_color}; border-color:{status_color}66; '
+            f'background:{status_color}1F;"><span class="dot" style="background:{status_color};"></span>'
+            f'Market: {"OPEN" if market_is_open else "CLOSED"} — {exch_name}</span><br>'
+            f'<span class="meta-text">{st.session_state.param_market_label}<br>Data Date: {now_str}</span>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    with watch_btn_col:
+        if st.button(f"⭐ Watchlist ({len(watchlist_tickers)})", key="header_watchlist_btn", width="stretch"):
+            st.session_state.nav_page = "Watchlist"
+            st.rerun()
 
 # Collapsed to a small info icon instead of an always-visible text banner --
 # the disclosure text still has to be reachable on every page (see
@@ -431,7 +438,6 @@ last_updated_full = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(scan_time)
 next_refresh_in = max(0, int(config.SCAN_CACHE_TTL_SECONDS - (time.time() - scan_time)))
 next_refresh_label = f"{next_refresh_in // 3600}h {(next_refresh_in % 3600) // 60}m"
 
-watchlist_tickers = watchlist.load()
 watchlist_key = (tuple(watchlist_tickers), rsi_min_val, rsi_max_val, volume_multiplier, near_breakout_pct)
 wl_cache_entry = st.session_state.watchlist_cache.get(watchlist_key)
 wl_cache_fresh = wl_cache_entry is not None and (time.time() - wl_cache_entry[0]) < config.SCAN_CACHE_TTL_SECONDS
@@ -714,35 +720,37 @@ def render_preview_table_html(df: pd.DataFrame, title: str, icon: str, nav_targe
     table_html = (
         '<div class="preview-table-wrap"><table class="html-table"><thead><tr>'
         "<th>Ticker</th><th>Company</th><th>LTP</th><th>Buy</th><th>Resistance</th>"
-        "<th>Support</th><th>Stop Loss</th><th>Signal</th><th>Watch</th>"
+        "<th>Support</th><th>Stop Loss</th><th>Signal</th><th>Watching</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table></div>"
     )
     st.markdown(table_html, unsafe_allow_html=True)
 
-    # The ⭐/☆ in the "Watch" column above is a plain HTML cell (st.markdown
-    # has no click handler), so it isn't clickable by itself. This row of
-    # real per-ticker buttons is the actual toggle -- one button per stock,
-    # so clicking it always acts on the ticker printed on it (no separate
-    # "pick a row first" step to get wrong).
-    tickers_in_view = df["Ticker"].tolist()
-    watch_cols = st.columns(len(tickers_in_view))
-    for i, ticker in enumerate(tickers_in_view):
-        short = ticker.replace(".NS", "")
-        is_watched = ticker in watchlist_tickers
-        with watch_cols[i]:
-            label = f"⭐ {short}" if is_watched else f"☆ {short}"
-            if st.button(label, key=f"prev_toggle_{title}_{ticker}", width="stretch"):
-                if is_watched:
-                    watchlist.remove(ticker)
-                else:
-                    watchlist.add(ticker)
-                st.rerun()
+    # The ⭐/☆ in the "Watching" column above is a plain HTML cell (st.markdown
+    # has no click handler) -- it's a status indicator, not a button. This
+    # popover is the actual toggle: one full-width, fully-labeled button per
+    # ticker, so there's always room for the label (a row of side-by-side
+    # buttons got squeezed down to icon-only on narrower screens/more rows,
+    # which read as broken/unclickable).
+    pick_col, manage_col = st.columns([3, 1.3])
+    with manage_col:
+        with st.popover("⭐ Manage Watchlist", width="stretch"):
+            for ticker in df["Ticker"].tolist():
+                short = ticker.replace(".NS", "")
+                is_watched = ticker in watchlist_tickers
+                label = f"⭐ Remove {short} from Watchlist" if is_watched else f"☆ Add {short} to Watchlist"
+                if st.button(label, key=f"prev_toggle_{title}_{ticker}", width="stretch"):
+                    if is_watched:
+                        watchlist.remove(ticker)
+                    else:
+                        watchlist.add(ticker)
+                    st.rerun()
 
     display_options = [t.replace(".NS", "") for t in df["Ticker"].tolist()]
     idx_map = dict(zip(display_options, df["Ticker"].tolist()))
-    chosen_display = st.selectbox(
-        "🔎 View details for", display_options, key=f"pick_{title}", label_visibility="collapsed",
-    )
+    with pick_col:
+        chosen_display = st.selectbox(
+            "🔎 View details for", display_options, key=f"pick_{title}", label_visibility="collapsed",
+        )
     if chosen_display:
         st.session_state.selected_ticker = idx_map[chosen_display]
 
