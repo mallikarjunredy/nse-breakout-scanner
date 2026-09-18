@@ -211,6 +211,19 @@ small built-in fallback list is used instead — see `src/universe.py`.
   links, and the module's docstring and in-UI captions say so rather
   than implying otherwise. "Peers" in this tab means other same-sector
   stocks from *today's own scan results*, not a real industry peer list.
+- `src/pre_breakout.py` — a second, independent strategy: "Upside Buy
+  Movement" (see its own section below). Deliberately NOT folded into
+  `scanner.py` or the draft/save Strategy Settings mechanism above --
+  it's a fixed-rule strategy (every threshold is
+  `config.PRE_BREAKOUT_*`, not user-adjustable), scoped to the Nifty 500
+  universe only, with its own page (`nav_page == "Upside Buy Movement"`)
+  and its own session-state cache (`pre_breakout_cache`, a bare
+  `(timestamp, result)` tuple rather than the main scan's dict-keyed
+  cache, since there are no varying parameters to key on). It reuses
+  `scanner._download_history` and `scanner._fetch_candidate_info`
+  (cross-module use of an underscore-prefixed helper, accepted here
+  since both modules live in the same small `src` package) rather than
+  duplicating the bulk-download logic.
 - `src/watchlist.py` — persistent watchlist storage (`data/watchlist.json`,
   a plain JSON list of tickers), independent of any scan. Survives app
   restarts, so a candidate added today is still there tomorrow even if it
@@ -400,6 +413,102 @@ trade, computed purely from price history (not investment advice):
 - **52W High**: highest High over the trailing ~252 trading days,
   including today (`indicators.compute_52w_high`).
 
+## Second strategy: "Upside Buy Movement" (pre-breakout consolidation)
+
+A second, independent strategy from the Breakout/Near Breakout one
+above: instead of looking for stocks that already broke out or are
+right at the edge of doing so, it looks for stocks that have NOT yet
+broken out but show the same technical fingerprint a stock typically
+has just before a strong breakout -- tight consolidation just under
+resistance, contracting volatility/volume, healthy (not overbought)
+momentum. Lives entirely in `src/pre_breakout.py`, with its own page
+("🎯 Upside Buy Movement" in the sidebar). Every threshold is a fixed
+rule from the strategy's own definition (`config.PRE_BREAKOUT_*`), not
+wired into the draft/save Strategy Settings mechanism -- there is
+nothing to adjust here by design.
+
+**Universe**: Nifty 500 only (hardcoded to `universe.get_universe("NSE")`),
+regardless of whatever market is selected elsewhere in the app, with
+the same mandatory `config.MIN_PRICE_INR` floor. All-Stocks/NYSE support
+for this strategy is out of scope for now.
+
+**Every condition below must pass together** (same all-or-nothing
+philosophy as the main strategy) for a stock to appear as a candidate at
+all -- `pre_breakout._evaluate_ticker`:
+
+- Close > EMA20 > EMA50, and both EMAs rising (compared to 5 trading
+  days ago) -- `indicators.compute_ema`.
+- Higher-high **and** higher-low over the trailing
+  `config.PRE_BREAKOUT_TREND_LOOKBACK_DAYS` (60 trading days, ~3 months):
+  that window is split into two halves, and the second half's max High
+  must exceed the first half's, with the same for min Low. This is a
+  deliberate simplification of full swing-point/zigzag detection --
+  documented as such rather than implying a more precise trend read.
+- RSI(14) between `PRE_BREAKOUT_RSI_MIN`/`MAX` (50-65) -- healthy
+  momentum, not overbought.
+- MACD histogram (`indicators.compute_macd_histogram`, standard 12/26/9)
+  is flat-or-improving vs. 4 days ago, or was positive at some point in
+  the last 5 days.
+- 5-day average volume < 20-day average volume (volume contraction).
+- ATR% (`indicators.compute_atr(df)/Close*100`) averaged over the last
+  `PRE_BREAKOUT_ATR_RECENT_DAYS` (5) is lower than the same average over
+  the `PRE_BREAKOUT_ATR_PRIOR_DAYS` (20) sessions before that -- ATR%
+  contracting.
+- The last `PRE_BREAKOUT_RANGE_RECENT_DAYS` (10) sessions' High-Low range
+  is narrower than the `PRE_BREAKOUT_RANGE_PRIOR_DAYS` (20) sessions
+  immediately before that.
+- A resistance level exists across the 20/40/60-day windows
+  (`pre_breakout._find_resistance` -- prefers the shortest lookback
+  whose level places today's close within the "meaningful" zone) with
+  today's close within 0-`PRE_BREAKOUT_NEAR_RESISTANCE_PCT` (5)% below it
+  (or already through it -- see "Already Broken Out" below).
+- If not already broken out: a "consolidation streak" of
+  `pre_breakout._count_consolidation_days` (trailing days, scanning
+  backward, within a wider ±8% band of that resistance level) between
+  `PRE_BREAKOUT_CONSOLIDATION_MIN_DAYS`/`MAX_DAYS` (7-20 sessions).
+- Positive 20-day relative strength vs. the benchmark index
+  (`pre_breakout._relative_strength`) -- **Nifty 50** (`^NSEI`), not a
+  true Nifty 500 index, for the same reason Market Overview uses Nifty
+  50 elsewhere in this app (no reliable free Nifty 500 index feed on
+  Yahoo). Sector-index relative strength (the spec's "preferably its
+  sector index") is intentionally NOT implemented -- there's no reliable
+  per-stock-sector-to-index mapping available from this data source, and
+  the spec itself only asked for it as a soft "preferably."
+
+**Three-way split** (mutually exclusive, computed together in one pass):
+
+- **Already Broken Out**: close is already above the resistance level.
+  Still requires the EMA/RSI/trend "quality" conditions (so it's showing
+  "a similar setup that already moved," not just any stock above any
+  level) but the consolidation-length/range-contraction checks don't
+  apply post-breakout and are skipped. Shown for reference/contrast only
+  -- explicitly excluded from being a pre-breakout candidate.
+- **Near Resistance**: a full candidate (passed every condition above)
+  within 0-`PRE_BREAKOUT_NEAR_VS_CONSOLIDATING_SPLIT_PCT` (2)% of
+  resistance -- the closest, most immediate-looking setups.
+- **Consolidating**: a full candidate further out, from that split point
+  up to the 5% ceiling -- still building the base.
+
+**Data honesty**: same Yahoo Finance EOD/delayed disclosure as
+everywhere else in the app, repeated on this page since it's reachable
+without visiting Home. The page explicitly does not claim any stock
+will break out on the next session -- it only reports today's measured
+technical state. If the Nifty 50 index download fails for a given scan,
+the page says so (`result["benchmark_missing"]`) rather than silently
+treating relative strength as passing or failing.
+
+**Detail panel integration**: clicking a row sets
+`st.session_state.selected_ticker` the same way every other table in
+the app does; `render_detail_panel()`'s `combined` lookup includes the
+three pre-breakout tables (from `st.session_state.pre_breakout_cache`,
+when a scan has run) alongside the main scanner's tables and the
+watchlist, so the shared Price Chart / Key Levels / Reason-for-Match
+panel works for these rows too. Pre-breakout rows carry their own
+"Why Qualified" string (same ✓-prefixed format as the main strategy) but
+have no "Quality Score"/"Buy Level"/"Stop Loss"/"52W High" -- those
+cards simply don't render for these rows (already-guarded by existing
+`pd.notna(...)` checks), rather than showing fabricated values.
+
 ## Watchlist, search, and the shared detail panel
 
 A third "⭐ Watchlist" tab shows a live snapshot (`scanner.get_watchlist_data`)
@@ -434,10 +543,12 @@ not a fraction — don't multiply by 100 when displaying it.
 
 ## Export
 
-Each table (Breakout, Near Breakout, Watchlist) has a single "⬇️" icon
-in its top-right corner (`_export_buttons` in `app.py`) that opens a
-`st.popover` with CSV and Excel download buttons, plus the sidebar has a
-"📥 Export All (Excel)" button that bundles all three into one multi-sheet
+Each table (Breakout, Near Breakout, Watchlist, and the three Upside Buy
+Movement tabs) has a single "⬇️" icon in its top-right corner
+(`_export_buttons` in `app.py`) that opens a `st.popover` with CSV and
+Excel download buttons, plus the sidebar has a "📥 Export All (Excel)"
+button that bundles the main strategy's three tables (not Upside Buy
+Movement's, which isn't part of that bundle) into one multi-sheet
 workbook. Excel export uses `openpyxl` via `pandas.ExcelWriter`.
 
 ## Market status, market overview, sector summary, scan history

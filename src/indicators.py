@@ -24,6 +24,36 @@ def compute_rsi(close: pd.Series, period: int = config.RSI_PERIOD) -> pd.Series:
     return rsi
 
 
+def compute_ema(series: pd.Series, period: int) -> pd.Series:
+    """Standard exponential moving average (span=period)."""
+    return series.ewm(span=period, adjust=False).mean()
+
+
+def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Wilder's Average True Range: an EWM of the True Range (the largest
+    of today's High-Low, |High - yesterday's Close|, |Low - yesterday's
+    Close|), smoothing out single-day gaps.
+    """
+    high, low, close = df["High"], df["Low"], df["Close"]
+    prev_close = close.shift(1)
+    true_range = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return true_range.ewm(alpha=1 / period, adjust=False).mean()
+
+
+def compute_macd_histogram(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
+    """Standard MACD histogram: (EMA-fast - EMA-slow) minus its own
+    `signal`-period EMA (the "signal line"). Positive/rising values mean
+    upward momentum is building.
+    """
+    macd_line = compute_ema(close, fast) - compute_ema(close, slow)
+    signal_line = compute_ema(macd_line, signal)
+    return macd_line - signal_line
+
+
 def compute_volume_ratio(volume: pd.Series, avg_period: int = config.VOLUME_AVG_PERIOD) -> float:
     """Today's volume divided by the average of the prior `avg_period` days."""
     if len(volume) < avg_period + 1:

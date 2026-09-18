@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-from src import config, deep_dive, detail, market_overview, scan_history, scanner, watchlist
+from src import config, deep_dive, detail, market_overview, pre_breakout, scan_history, scanner, watchlist
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
 
@@ -106,6 +106,8 @@ if "scan_cache" not in st.session_state:
     st.session_state.scan_cache = {}
 if "watchlist_cache" not in st.session_state:
     st.session_state.watchlist_cache = {}
+if "pre_breakout_cache" not in st.session_state:
+    st.session_state.pre_breakout_cache = None  # (timestamp, result) once a scan has run, else None
 if "selected_ticker" not in st.session_state:
     st.session_state.selected_ticker = None
 if "search_result" not in st.session_state:
@@ -356,8 +358,8 @@ st.markdown(
 # ---------------------------------------------------------------------------
 
 _NAV_ITEMS = [
-    ("Home", "🏠"), ("Scanner", "🔍"), ("Watchlist", "⭐"), ("Stock Analysis", "📈"),
-    ("Scan History", "🕐"), ("Strategy Settings", "⚙️"), ("Help & Support", "❓"),
+    ("Home", "🏠"), ("Scanner", "🔍"), ("Upside Buy Movement", "🎯"), ("Watchlist", "⭐"),
+    ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Strategy Settings", "⚙️"), ("Help & Support", "❓"),
 ]
 
 with st.sidebar:
@@ -610,6 +612,49 @@ def _select_from_table(df: pd.DataFrame, columns_order: list, key: str, height: 
         df, hide_index=True, width="stretch", column_config=_display_columns(),
         column_order=_visible(df, columns_order), on_select="rerun", selection_mode="single-row",
         key=key, **kwargs,
+    )
+    rows = event["selection"]["rows"]
+    if rows:
+        st.session_state.selected_ticker = df.iloc[rows[0]]["Ticker"]
+
+
+_PRE_BREAKOUT_COLUMN_ORDER = [
+    "Rank", "Ticker", "Company Name", "Current Price", "Resistance Level", "Resistance Window",
+    "% Below Resistance", "EMA20", "EMA50", "RSI", "MACD Histogram", "ATR %", "ATR Contracting",
+    "5D Avg Volume", "20D Avg Volume", "Volume Ratio (5D/20D)", "Consolidation Days",
+    "20D Relative Strength", "Setup Status",
+]
+
+
+def _pre_breakout_columns():
+    return {
+        "Rank": st.column_config.NumberColumn("Rank", width="small"),
+        "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+        "Company Name": st.column_config.TextColumn("Company Name"),
+        "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
+        "Resistance Level": st.column_config.NumberColumn("Resistance", format="₹%.2f"),
+        "Resistance Window": st.column_config.TextColumn("Window", width="small"),
+        "% Below Resistance": st.column_config.NumberColumn("% Below Resistance", format="%.2f%%"),
+        "EMA20": st.column_config.NumberColumn("EMA20", format="₹%.2f"),
+        "EMA50": st.column_config.NumberColumn("EMA50", format="₹%.2f"),
+        "RSI": st.column_config.NumberColumn("RSI14", format="%.1f"),
+        "MACD Histogram": st.column_config.NumberColumn("MACD Histogram", format="%.3f"),
+        "ATR %": st.column_config.NumberColumn("ATR%", format="%.2f%%"),
+        "ATR Contracting": st.column_config.CheckboxColumn("ATR Contraction"),
+        "5D Avg Volume": st.column_config.NumberColumn("5D Avg Volume", format="%d"),
+        "20D Avg Volume": st.column_config.NumberColumn("20D Avg Volume", format="%d"),
+        "Volume Ratio (5D/20D)": st.column_config.NumberColumn("Volume Ratio", format="%.2fx"),
+        "Consolidation Days": st.column_config.NumberColumn("Consolidation Days"),
+        "20D Relative Strength": st.column_config.NumberColumn("20D Relative Strength", format="%+.2f%%"),
+        "Setup Status": st.column_config.TextColumn("Setup Status", width="small"),
+    }
+
+
+def _select_from_pre_breakout_table(df: pd.DataFrame, key: str):
+    event = st.dataframe(
+        df, hide_index=True, width="stretch", column_config=_pre_breakout_columns(),
+        column_order=_visible(df, _PRE_BREAKOUT_COLUMN_ORDER), on_select="rerun", selection_mode="single-row",
+        key=key,
     )
     rows = event["selection"]["rows"]
     if rows:
@@ -1057,9 +1102,14 @@ def render_detail_panel():
     is_inr = ticker.endswith(".NS")
     curr = "₹" if is_inr else "$"
 
+    pb_cache = st.session_state.pre_breakout_cache
+    pre_breakout_tables = (
+        [pb_cache[1]["near_resistance"], pb_cache[1]["consolidating"], pb_cache[1]["already_broken_out"]]
+        if pb_cache is not None else []
+    )
     combined = pd.concat(
         [result["breakout"], result["near_breakout"], result["weekly_breakout"],
-         result["weekly_near_breakout"], watchlist_df],
+         result["weekly_near_breakout"], watchlist_df, *pre_breakout_tables],
         ignore_index=True,
     )
     match = combined[combined["Ticker"] == ticker]
@@ -1472,6 +1522,96 @@ elif nav_page == "Scanner":
         with st.container(border=True):
             render_sector_summary()
 
+    st.divider()
+    render_detail_panel()
+    render_footer()
+
+
+# ---------------------------------------------------------------------------
+# Page: Upside Buy Movement (pre-breakout consolidation strategy)
+# ---------------------------------------------------------------------------
+
+elif nav_page == "Upside Buy Movement":
+    st.markdown("### 🎯 Upside Buy Movement — Pre-Breakout Watchlist")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "Scans the Nifty 500 universe (closing price > ₹100) for stocks that have NOT yet broken out but "
+        "are consolidating tightly just under a resistance level, on contracting volatility and volume -- "
+        "a possible pre-breakout setup, not a prediction that any stock will break out on the next session."
+    )
+
+    pb_cache = st.session_state.pre_breakout_cache
+    pb_cache_fresh = pb_cache is not None and (time.time() - pb_cache[0]) < config.SCAN_CACHE_TTL_SECONDS
+    run_clicked = st.button("▶️ Run Upside Buy Movement Scan", type="primary", key="run_pre_breakout")
+
+    if run_clicked or pb_cache is None:
+        pb_progress = st.progress(0, text="Starting scan...")
+
+        def _on_pb_progress(frac, text):
+            pb_progress.progress(min(frac, 1.0), text=text)
+
+        with st.spinner("Scanning Nifty 500 for pre-breakout setups..."):
+            pb_result = pre_breakout.scan_pre_breakout(progress_callback=_on_pb_progress)
+        pb_progress.empty()
+        st.session_state.pre_breakout_cache = (time.time(), pb_result)
+    else:
+        pb_result = pb_cache[1]
+
+    pb_scan_time = st.session_state.pre_breakout_cache[0]
+    pb_scan_label = datetime.datetime.fromtimestamp(
+        pb_scan_time, tz=ZoneInfo("Asia/Kolkata")
+    ).strftime("%d %b %Y, %I:%M %p IST")
+    st.caption(
+        f"Last scanned: {pb_scan_label} · Universe: Nifty 500 ({pb_result['universe_size']} instruments) · "
+        f"Scanned OK: {pb_result['scanned']}"
+    )
+    if pb_result.get("benchmark_missing"):
+        st.warning(
+            "Nifty 50 index data was unavailable during this scan -- the relative-strength condition "
+            "couldn't be checked, so results may be incomplete. Try running the scan again."
+        )
+    if not pb_cache_fresh and not run_clicked:
+        st.caption("⏳ This data may be stale -- use ▶️ Run Upside Buy Movement Scan for the latest.")
+
+    near_df = pb_result["near_resistance"]
+    consolidating_df = pb_result["consolidating"]
+    broken_df = pb_result["already_broken_out"]
+
+    tab_near, tab_consol, tab_broken = st.tabs([
+        f"🎯 Near Resistance ({len(near_df)})",
+        f"📦 Consolidating ({len(consolidating_df)})",
+        f"🚀 Already Broken Out ({len(broken_df)})",
+    ])
+    with tab_near:
+        st.caption("Within 0-2% of resistance -- the most imminent-looking setups.")
+        if near_df.empty:
+            st.info("No stocks matched your saved strategy in this scan.")
+        else:
+            _export_buttons(near_df, "upside_near_resistance", "ubm_near")
+            _select_from_pre_breakout_table(near_df, key="ubm_near_table")
+    with tab_consol:
+        st.caption("Within 2-5% of resistance, still building the base.")
+        if consolidating_df.empty:
+            st.info("No stocks matched your saved strategy in this scan.")
+        else:
+            _export_buttons(consolidating_df, "upside_consolidating", "ubm_consolidating")
+            _select_from_pre_breakout_table(consolidating_df, key="ubm_consolidating_table")
+    with tab_broken:
+        st.caption(
+            "Same quality conditions (EMA structure, RSI, trend), but price is already above resistance -- "
+            "too late for a pre-breakout entry on these; shown for reference only."
+        )
+        if broken_df.empty:
+            st.info("No stocks with a similar setup have already broken out in this scan.")
+        else:
+            _export_buttons(broken_df, "upside_already_broken_out", "ubm_broken")
+            _select_from_pre_breakout_table(broken_df, key="ubm_broken_table")
+
+    st.caption(
+        "Every condition (EMA structure, trend, RSI, MACD, volume contraction, ATR contraction, range "
+        "contraction, consolidation length, relative strength) is a fixed rule from this strategy's own "
+        "definition, not a claim about what will happen next. Not investment advice."
+    )
     st.divider()
     render_detail_panel()
     render_footer()
