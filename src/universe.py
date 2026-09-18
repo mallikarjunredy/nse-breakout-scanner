@@ -1,5 +1,5 @@
-"""Loads the ticker universe for each supported market, with on-disk
-caching so the app doesn't have to hit NSE/Wikipedia on every run.
+"""Loads the Nifty 500 ticker universe, with on-disk caching so the app
+doesn't have to hit NSE's archives on every run.
 """
 
 import io
@@ -20,18 +20,13 @@ _HEADERS = {
 
 _CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60  # 1 week
 
-# Small fallback lists used only if both the live fetch and the on-disk
+# Small fallback list used only if both the live fetch and the on-disk
 # cache are unavailable (e.g. first run with no internet access).
 _FALLBACK_NIFTY500 = [
     "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "HINDUNILVR",
     "ITC", "SBIN", "BHARTIARTL", "BAJFINANCE", "KOTAKBANK", "LT",
     "AXISBANK", "ASIANPAINT", "MARUTI", "TITAN", "SUNPHARMA", "WIPRO",
     "ULTRACEMCO", "NESTLEIND",
-]
-_FALLBACK_SP500 = [
-    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "BRK-B", "JPM",
-    "XOM", "UNH", "JNJ", "V", "PG", "HD", "MA", "MRK", "ABBV", "PEP",
-    "KO", "BAC",
 ]
 
 
@@ -69,79 +64,20 @@ def _fetch_nifty500_live() -> list[str]:
     return symbols
 
 
-def _fetch_nse_all_live() -> list[str]:
-    # "Nifty Total Market" is NSE's broadest official index (~750 EQ-series
-    # stocks), used here as a practical stand-in for "all NSE stocks" --
-    # it covers virtually the whole liquid, tradeable NSE universe without
-    # pulling in suspended/illiquid/trade-to-trade-only symbols that a raw
-    # full listing would include and that yfinance mostly can't price anyway.
-    url = "https://archives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv"
-    resp = requests.get(url, headers=_HEADERS, timeout=15)
-    resp.raise_for_status()
-    df = pd.read_csv(io.StringIO(resp.text))
-    symbols = df["Symbol"].dropna().astype(str).str.strip().tolist()
-    if not symbols:
-        raise ValueError("Empty NSE Total Market list from NSE archives")
-    return symbols
-
-
-def _fetch_sp500_live() -> list[str]:
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    resp = requests.get(url, headers=_HEADERS, timeout=15)
-    resp.raise_for_status()
-    tables = pd.read_html(io.StringIO(resp.text))
-    df = tables[0]
-    symbols = df["Symbol"].dropna().astype(str).str.strip().tolist()
-    # yfinance uses '-' instead of '.' in tickers like BRK.B -> BRK-B
-    symbols = [s.replace(".", "-") for s in symbols]
-    if not symbols:
-        raise ValueError("Empty S&P 500 list from Wikipedia")
-    return symbols
-
-
-def _get_universe(name: str, fetch_fn, fallback: list[str]) -> tuple[list[str], str]:
-    """Returns (tickers, source_description)."""
-    cached = _read_cache(name)
-    if cached is not None and cached[1] < _CACHE_MAX_AGE_SECONDS:
-        return cached[0], "cached list (< 7 days old)"
-
-    try:
-        tickers = fetch_fn()
-        _write_cache(name, tickers)
-        return tickers, "freshly fetched"
-    except Exception:
-        pass
-
-    if cached is not None:
-        return cached[0], "stale cached list (live fetch failed)"
-
-    return fallback, "built-in fallback list (live fetch failed, no cache)"
-
-
 def get_nifty_500() -> tuple[list[str], str]:
     """Returns (['RELIANCE.NS', ...], source_description)."""
-    symbols, source = _get_universe("nifty500", _fetch_nifty500_live, _FALLBACK_NIFTY500)
+    name = "nifty500"
+    cached = _read_cache(name)
+    if cached is not None and cached[1] < _CACHE_MAX_AGE_SECONDS:
+        symbols, source = cached[0], "cached list (< 7 days old)"
+    else:
+        try:
+            symbols = _fetch_nifty500_live()
+            _write_cache(name, symbols)
+            source = "freshly fetched"
+        except Exception:
+            if cached is not None:
+                symbols, source = cached[0], "stale cached list (live fetch failed)"
+            else:
+                symbols, source = _FALLBACK_NIFTY500, "built-in fallback list (live fetch failed, no cache)"
     return [f"{s}.NS" for s in symbols], source
-
-
-def get_nse_all() -> tuple[list[str], str]:
-    """Returns (['RELIANCE.NS', ...], source_description) for NSE's
-    broadest official list (Nifty Total Market), used as "all NSE stocks".
-    """
-    symbols, source = _get_universe("nse_all", _fetch_nse_all_live, _FALLBACK_NIFTY500)
-    return [f"{s}.NS" for s in symbols], source
-
-
-def get_sp500() -> tuple[list[str], str]:
-    """Returns (['AAPL', ...], source_description)."""
-    return _get_universe("sp500", _fetch_sp500_live, _FALLBACK_SP500)
-
-
-def get_universe(market: str) -> tuple[list[str], str]:
-    if market == "NSE":
-        return get_nifty_500()
-    if market == "NSE_ALL":
-        return get_nse_all()
-    if market == "NYSE":
-        return get_sp500()
-    raise ValueError(f"Unknown market: {market}")

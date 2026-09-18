@@ -25,9 +25,12 @@ def load() -> list[dict]:
         return []
 
 
-def record(market_label: str, result: dict) -> None:
-    """Appends one scan's summary to the history log, keeping only the
-    most recent config.SCAN_HISTORY_MAX_ENTRIES entries.
+def record(result: dict) -> None:
+    """Appends one "Upside Buy Movement" scan's summary to the history
+    log, keeping only the most recent config.SCAN_HISTORY_MAX_ENTRIES
+    entries. Older entries (from before this app had only one strategy)
+    may carry different fields -- callers reading history back should use
+    `.get(...)` with a default rather than assuming every field exists.
     """
     entries = load()
     now_ts = time.time()
@@ -38,15 +41,13 @@ def record(market_label: str, result: dict) -> None:
         # IST explicitly -- the server's local time (e.g. a cloud host in
         # UTC) is not necessarily IST, and NSE data is IST-relevant.
         "date": datetime.datetime.fromtimestamp(now_ts, tz=_IST).strftime("%d %b %Y %I:%M %p IST"),
-        "market": market_label,
-        "universe_size": result.get("universe_size"),
-        "scanned": result.get("scanned"),
-        "eligible": result.get("eligible"),
+        "market": "Nifty 500",
+        "universe_size": universe_size,
+        "scanned": scanned,
         "failures": max(0, universe_size - scanned),
-        "breakouts": len(result.get("breakout", [])),
-        "near_breakouts": len(result.get("near_breakout", [])),
-        "weekly_breakouts": len(result.get("weekly_breakout", [])),
-        "weekly_near_breakouts": len(result.get("weekly_near_breakout", [])),
+        "near_resistance": len(result.get("near_resistance", [])),
+        "consolidating": len(result.get("consolidating", [])),
+        "already_broken_out": len(result.get("already_broken_out", [])),
     })
     entries = entries[-config.SCAN_HISTORY_MAX_ENTRIES:]
 
