@@ -1,15 +1,17 @@
 # NSE Upside Buy Movement Scanner
 
-A Streamlit dashboard with one strategy: **"Upside Buy Movement"** — a
-pre-breakout consolidation scanner over the Nifty 500. It looks for
-stocks that have NOT yet broken out but show the technical fingerprint
-of a stock immediately before a strong breakout: tight consolidation
-just under a meaningful resistance level, contracting volatility and
-volume, and healthy (not overbought) momentum. Results split into
-**Near Resistance**, **Consolidating**, and **Already Broken Out**
-(reference only), plus a persistent Watchlist, a stock-search box, a
-Market Overview (Nifty 50 / Bank Nifty / Sensex), Indian market news,
-and scan history.
+A Streamlit dashboard with one strategy, **"Upside Buy Movement"** — a
+pre-breakout consolidation scanner — run over two universes as two
+separate pages: **"🎯 Upside Buy Movement"** (Nifty 500) and
+**"💹 Upside Buy Movement above 100"** (all NSE stocks priced above
+₹100). Both look for stocks that have NOT yet broken out but show the
+technical fingerprint of a stock immediately before a strong breakout:
+tight consolidation just under a meaningful resistance level,
+contracting volatility and volume, and healthy (not overbought)
+momentum. Results split into **Near Resistance**, **Consolidating**,
+and **Already Broken Out** (reference only), plus a persistent
+Watchlist, a stock-search box, a Market Overview (Nifty 50 / Bank Nifty
+/ Sensex), Indian market news, and scan history.
 
 There used to be a second, adjustable "Breakout / Near Breakout"
 strategy with its own Strategy Settings draft/save page and Scanner
@@ -64,21 +66,25 @@ used instead — see `src/universe.py`.
   file renders whichever page is active). This is deliberately NOT
   Streamlit's file-based multi-page routing (`st.navigation`/`st.Page`)
   -- a single script keeps the existing `st.session_state`-based
-  scan/watchlist caching working unchanged. Pages: Home (dashboard
-  summary), Upside Buy Movement (full scan results: Near Resistance /
+  scan/watchlist caching working unchanged. Pages: Home (Nifty-500-scoped
+  dashboard summary), Upside Buy Movement and Upside Buy Movement above
+  100 (full scan results for each universe: Near Resistance /
   Consolidating / Already Broken Out tabs), Watchlist, Stock Analysis
   (search-driven detail view), Scan History, Help & Support. The header
-  bar (logo, search box, market status/date badges), the scan/watchlist
-  fetch, and `render_detail_panel()` / `render_footer()` all run
-  before/independent of the page routing, so every page can use them.
+  bar (logo, search box, market status/date badges), the Nifty-500 scan/
+  watchlist fetch, and `render_detail_panel()` / `render_footer()` all
+  run before/independent of the page routing, so every page can use
+  them; the "above 100" page runs its own separate, lazily-triggered
+  scan (see "The strategy" section) since Home doesn't need it.
   Auto-refreshes every `config.AUTOREFRESH_INTERVAL_MS` (currently 5
   hours) via `streamlit-autorefresh`.
 - **There is nothing user-adjustable.** Every threshold the strategy
   uses is a fixed constant in `src/config.py` (`PRE_BREAKOUT_*`). There
   is no Strategy Settings page, no draft/save flow, and no per-scan
-  parameter overrides -- `pre_breakout.scan_pre_breakout()` takes only
-  `min_price` (defaults to `config.MIN_PRICE_INR`) and a progress
-  callback. The scan result is cached in
+  threshold overrides -- `pre_breakout.scan_pre_breakout()` takes only
+  `min_price` (defaults to `config.MIN_PRICE_INR`), a progress callback,
+  and `universe_name` (`"nifty500"` or `"all_nse"` -- see "The strategy"
+  section for the two-page setup this drives). The scan result is cached in
   `st.session_state.pre_breakout_cache` as a bare `(timestamp, result)`
   tuple (not the old dict-keyed-by-parameters cache, since there are no
   varying parameters), refreshed on `config.SCAN_CACHE_TTL_SECONDS` TTL
@@ -156,8 +162,9 @@ used instead — see `src/universe.py`.
 - `src/universe.py` — loads and caches the Nifty 500 ticker list from
   NSE's archives CSV (`get_nifty_500()`), falling back to a small
   built-in list if both the live fetch and the on-disk cache fail. This
-  app is Nifty 500 / NSE-only; there is no "All Stocks" or NYSE universe
-  option (removed along with the old strategy).
+  app is NSE-only (no NYSE universe -- removed along with the old
+  strategy); `get_nse_all()` (NSE's "Nifty Total Market" list, ~750
+  stocks) backs the "above 100" page's broader universe.
 - `src/indicators.py` — four pure, generic indicator functions used by
   the strategy: `compute_rsi` (Wilder's RSI), `compute_ema`,
   `compute_atr` (Wilder's ATR), `compute_macd_histogram` (standard
@@ -197,11 +204,34 @@ used instead — see `src/universe.py`.
   Bank Nifty / Sensex level + change%, skipping (never fabricating) any
   index whose data isn't available right now.
 
-## The strategy: "Upside Buy Movement"
+## The strategy: "Upside Buy Movement" (two universe variants)
 
-**Universe**: Nifty 500 only, with the mandatory `config.MIN_PRICE_INR`
-(₹100) price floor -- a stock priced at exactly ₹100.00 does NOT
-qualify, only strictly above it does.
+The same rule set runs over two different universes, as two separate
+pages with separate caches (`st.session_state.pre_breakout_cache` for
+Nifty 500, `pre_breakout_all_cache` for the all-NSE variant) and
+separate scan-history entries (distinguished by the `market` field --
+"Nifty 500" vs "All NSE Stocks (₹100+)"):
+
+- **"🎯 Upside Buy Movement"** -- Nifty 500 only.
+- **"💹 Upside Buy Movement above 100"** -- all NSE stocks priced above
+  ₹100 (NSE's broadest official list, "Nifty Total Market" via
+  `universe.get_nse_all()`, ~750 stocks, as a practical stand-in for
+  "all NSE stocks" -- same reasoning as the old two-strategy app's
+  "All Stocks" market).
+
+`pre_breakout.scan_pre_breakout(universe_name=...)` selects the loader
+via `_UNIVERSE_LOADERS` (`"nifty500"` or `"all_nse"`) and stamps the
+result with a human-readable `universe_label` used for both the page
+caption and the Scan History `market` field. Both pages are otherwise
+identical in structure (their own "▶️ Run Scan" button + TTL cache +
+Near Resistance/Consolidating/Already Broken Out tabs); only Home's
+cards are Nifty-500-scoped -- the "above 100" page has no Home
+equivalent dashboard, by design, since nothing asked for one.
+
+**Universe** (Nifty 500 variant): Nifty 500 only, with the mandatory
+`config.MIN_PRICE_INR` (₹100) price floor -- a stock priced at exactly
+₹100.00 does NOT qualify, only strictly above it does. The "above 100"
+variant applies the same price floor to the broader all-NSE list.
 
 **Every condition below must pass together** for a stock to appear as a
 candidate at all (`pre_breakout._evaluate_ticker`):

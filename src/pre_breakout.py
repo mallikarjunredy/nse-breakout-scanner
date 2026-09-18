@@ -229,12 +229,30 @@ def _build_table(rows: list[dict], status: str) -> pd.DataFrame:
     return df_out
 
 
-def scan_pre_breakout(min_price: float | None = None, progress_callback=None) -> dict:
-    """Runs the "Upside Buy Movement" strategy over the Nifty 500 universe."""
+_UNIVERSE_LOADERS = {
+    "nifty500": (universe.get_nifty_500, "Nifty 500"),
+    "all_nse": (universe.get_nse_all, "All NSE Stocks (₹100+)"),
+}
+
+
+def scan_pre_breakout(
+    min_price: float | None = None, progress_callback=None, universe_name: str = "nifty500",
+) -> dict:
+    """Runs the Upside Buy Movement rule set over a chosen universe:
+
+    - "nifty500" -- the "Upside Buy Movement" strategy (Nifty 500 only).
+    - "all_nse" -- the "Upside Buy Movement above 100" strategy (NSE's
+      broadest official list, "Nifty Total Market", as a practical stand-
+      in for "all NSE stocks" -- same rule set, just not restricted to
+      the Nifty 500 index membership).
+    """
     if min_price is None:
         min_price = config.MIN_PRICE_INR
+    if universe_name not in _UNIVERSE_LOADERS:
+        raise ValueError(f"Unknown universe_name: {universe_name}")
+    loader, universe_label = _UNIVERSE_LOADERS[universe_name]
 
-    tickers, source = universe.get_nifty_500()
+    tickers, source = loader()
 
     if progress_callback:
         progress_callback(0.05, f"Downloading price history for {len(tickers)} tickers...")
@@ -279,6 +297,7 @@ def scan_pre_breakout(min_price: float | None = None, progress_callback=None) ->
         "source": source,
         "benchmark_missing": index_df is None,
         "data_asof_date": data_asof_date,
+        "universe_label": universe_label,
     }
 
 

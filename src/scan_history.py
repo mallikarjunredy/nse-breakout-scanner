@@ -25,12 +25,14 @@ def load() -> list[dict]:
         return []
 
 
-def record(result: dict) -> None:
-    """Appends one "Upside Buy Movement" scan's summary to the history
-    log, keeping only the most recent config.SCAN_HISTORY_MAX_ENTRIES
-    entries. Older entries (from before this app had only one strategy)
-    may carry different fields -- callers reading history back should use
-    `.get(...)` with a default rather than assuming every field exists.
+def record(result: dict, universe_label: str = "Nifty 500") -> None:
+    """Appends one Upside Buy Movement scan's summary to the history log
+    (either the Nifty 500 or the "above 100" all-NSE variant, identified
+    by `universe_label`), keeping only the most recent
+    config.SCAN_HISTORY_MAX_ENTRIES entries across both. Older entries
+    (from before this app had only one strategy) may carry different
+    fields -- callers reading history back should use `.get(...)` with a
+    default rather than assuming every field exists.
     """
     entries = load()
     now_ts = time.time()
@@ -41,7 +43,7 @@ def record(result: dict) -> None:
         # IST explicitly -- the server's local time (e.g. a cloud host in
         # UTC) is not necessarily IST, and NSE data is IST-relevant.
         "date": datetime.datetime.fromtimestamp(now_ts, tz=_IST).strftime("%d %b %Y %I:%M %p IST"),
-        "market": "Nifty 500",
+        "market": universe_label,
         "universe_size": universe_size,
         "scanned": scanned,
         "failures": max(0, universe_size - scanned),

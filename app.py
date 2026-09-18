@@ -102,6 +102,8 @@ def _market_status() -> tuple[str, bool]:
 
 if "pre_breakout_cache" not in st.session_state:
     st.session_state.pre_breakout_cache = None  # (timestamp, result) once a scan has run, else None
+if "pre_breakout_all_cache" not in st.session_state:
+    st.session_state.pre_breakout_all_cache = None  # same, for the "above 100" all-NSE strategy
 if "watchlist_cache" not in st.session_state:
     st.session_state.watchlist_cache = {}
 if "selected_ticker" not in st.session_state:
@@ -227,8 +229,8 @@ st.markdown(
 # ---------------------------------------------------------------------------
 
 _NAV_ITEMS = [
-    ("Home", "🏠"), ("Upside Buy Movement", "🎯"), ("Watchlist", "⭐"),
-    ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
+    ("Home", "🏠"), ("Upside Buy Movement", "🎯"), ("Upside Buy Movement above 100", "💹"),
+    ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
 ]
 
 with st.sidebar:
@@ -350,10 +352,12 @@ if need_scan:
         progress_bar.progress(min(frac, 1.0), text=text_)
 
     with st.spinner("Scanning the Nifty 500 for Upside Buy Movement setups..."):
-        result = pre_breakout.scan_pre_breakout(min_price=MIN_PRICE, progress_callback=_on_progress)
+        result = pre_breakout.scan_pre_breakout(
+            min_price=MIN_PRICE, progress_callback=_on_progress, universe_name="nifty500",
+        )
     progress_bar.empty()
     st.session_state.pre_breakout_cache = (time.time(), result)
-    scan_history.record(result)
+    scan_history.record(result, universe_label=result["universe_label"])
 else:
     result = pb_cache[1]
 
@@ -700,8 +704,14 @@ def render_detail_panel():
         st.caption("👆 Click a row in any table above, or search for a ticker, to see detailed stock information here.")
         return
 
+    all_cache = st.session_state.pre_breakout_all_cache
+    all_tables = (
+        [all_cache[1]["near_resistance"], all_cache[1]["consolidating"], all_cache[1]["already_broken_out"]]
+        if all_cache is not None else []
+    )
     combined = pd.concat(
-        [result["near_resistance"], result["consolidating"], result["already_broken_out"], watchlist_df],
+        [result["near_resistance"], result["consolidating"], result["already_broken_out"],
+         watchlist_df, *all_tables],
         ignore_index=True,
     )
     match = combined[combined["Ticker"] == ticker]
@@ -971,8 +981,8 @@ def render_detail_panel():
                 )
 
 
-def render_footer():
-    scan_label_full = datetime.datetime.fromtimestamp(scan_time, tz=IST).strftime("%Y-%m-%d %H:%M:%S IST")
+def render_footer(scan_ts: float | None = None):
+    scan_label_full = datetime.datetime.fromtimestamp(scan_ts or scan_time, tz=IST).strftime("%Y-%m-%d %H:%M:%S IST")
     st.markdown(
         f'<div class="app-footer">'
         f'<span>Data source: Yahoo Finance (cached, EOD/delayed) · For educational purposes only. '
@@ -1095,6 +1105,98 @@ elif nav_page == "Upside Buy Movement":
 
 
 # ---------------------------------------------------------------------------
+# Page: Upside Buy Movement above 100 (same rules, all-NSE universe)
+# ---------------------------------------------------------------------------
+
+elif nav_page == "Upside Buy Movement above 100":
+    st.markdown("### 💹 Upside Buy Movement above 100 — All-NSE Pre-Breakout Watchlist")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "Same Upside Buy Movement rules as the Nifty 500 page, but scanned across all NSE stocks "
+        "(closing price > ₹100) rather than just the Nifty 500 -- a possible pre-breakout setup, not a "
+        "prediction that any stock will break out on the next session."
+    )
+
+    all_cache = st.session_state.pre_breakout_all_cache
+    all_cache_fresh = all_cache is not None and (time.time() - all_cache[0]) < config.SCAN_CACHE_TTL_SECONDS
+    run_all_clicked = st.button("▶️ Run Upside Buy Movement above 100 Scan", type="primary", key="run_pre_breakout_all")
+
+    if run_all_clicked or all_cache is None:
+        all_progress = st.progress(0, text="Starting scan...")
+
+        def _on_all_progress(frac, text_):
+            all_progress.progress(min(frac, 1.0), text=text_)
+
+        with st.spinner("Scanning all NSE stocks for Upside Buy Movement setups..."):
+            result_all = pre_breakout.scan_pre_breakout(
+                min_price=MIN_PRICE, progress_callback=_on_all_progress, universe_name="all_nse",
+            )
+        all_progress.empty()
+        st.session_state.pre_breakout_all_cache = (time.time(), result_all)
+        scan_history.record(result_all, universe_label=result_all["universe_label"])
+    else:
+        result_all = all_cache[1]
+
+    scan_time_all = st.session_state.pre_breakout_all_cache[0]
+    next_refresh_in_all = max(0, int(config.SCAN_CACHE_TTL_SECONDS - (time.time() - scan_time_all)))
+    scan_label_all = datetime.datetime.fromtimestamp(scan_time_all, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
+    st.caption(
+        f"Last scanned: {scan_label_all} · Universe: All NSE Stocks ({result_all['universe_size']} instruments) · "
+        f"Scanned OK: {result_all['scanned']}"
+    )
+    if result_all.get("benchmark_missing"):
+        st.warning(
+            "Nifty 50 index data was unavailable during this scan -- the relative-strength condition "
+            "couldn't be checked, so results may be incomplete. Try running the scan again."
+        )
+    if next_refresh_in_all <= 0:
+        st.caption("⏳ This data may be stale -- use ▶️ Run Upside Buy Movement above 100 Scan for the latest.")
+
+    near_df_all = result_all["near_resistance"]
+    consolidating_df_all = result_all["consolidating"]
+    broken_df_all = result_all["already_broken_out"]
+
+    tab_near_a, tab_consol_a, tab_broken_a = st.tabs([
+        f"🎯 Near Resistance ({len(near_df_all)})",
+        f"📦 Consolidating ({len(consolidating_df_all)})",
+        f"🚀 Already Broken Out ({len(broken_df_all)})",
+    ])
+    with tab_near_a:
+        st.caption("Within 0-2% of resistance -- the most imminent-looking setups.")
+        if near_df_all.empty:
+            st.info("No stocks matched your saved strategy in this scan.")
+        else:
+            _export_buttons(near_df_all, "upside100_near_resistance", "ubm100_near")
+            _select_from_pre_breakout_table(near_df_all, key="ubm100_near_table")
+    with tab_consol_a:
+        st.caption("Within 2-5% of resistance, still building the base.")
+        if consolidating_df_all.empty:
+            st.info("No stocks matched your saved strategy in this scan.")
+        else:
+            _export_buttons(consolidating_df_all, "upside100_consolidating", "ubm100_consolidating")
+            _select_from_pre_breakout_table(consolidating_df_all, key="ubm100_consolidating_table")
+    with tab_broken_a:
+        st.caption(
+            "Same quality conditions (EMA structure, RSI, trend), but price is already above resistance -- "
+            "too late for a pre-breakout entry on these; shown for reference only."
+        )
+        if broken_df_all.empty:
+            st.info("No stocks with a similar setup have already broken out in this scan.")
+        else:
+            _export_buttons(broken_df_all, "upside100_already_broken_out", "ubm100_broken")
+            _select_from_pre_breakout_table(broken_df_all, key="ubm100_broken_table")
+
+    st.caption(
+        "Every condition (EMA structure, trend, RSI, MACD, volume contraction, ATR contraction, range "
+        "contraction, consolidation length, relative strength) is a fixed rule from this strategy's own "
+        "definition, not a claim about what will happen next. Not investment advice."
+    )
+    st.divider()
+    render_detail_panel()
+    render_footer(scan_ts=scan_time_all)
+
+
+# ---------------------------------------------------------------------------
 # Page: Watchlist
 # ---------------------------------------------------------------------------
 
@@ -1162,15 +1264,19 @@ elif nav_page == "Help & Support":
         **Data source**: This app uses `yfinance` (Yahoo Finance) only — there is no official NSE
         real-time feed. Quotes may be delayed or cached (EOD).
 
-        **Strategy**: "Upside Buy Movement" looks for Nifty 500 stocks that have NOT yet broken out but
-        show the technical fingerprint of a stock immediately before a strong breakout: Close > EMA20 >
-        EMA50 (both rising), a higher-high/higher-low trend over ~3 months, RSI(14) 50-65, a flat/improving
-        or recently-positive MACD histogram, contracting volume and ATR%, a narrowing 10-day trading range,
-        a 7-20 session consolidation within 0-5% of a 20/40/60-day resistance level, and positive 20-day
+        **Strategy**: "Upside Buy Movement" looks for stocks that have NOT yet broken out but show the
+        technical fingerprint of a stock immediately before a strong breakout: Close > EMA20 > EMA50 (both
+        rising), a higher-high/higher-low trend over ~3 months, RSI(14) 50-65, a flat/improving or
+        recently-positive MACD histogram, contracting volume and ATR%, a narrowing 10-day trading range, a
+        7-20 session consolidation within 0-5% of a 20/40/60-day resistance level, and positive 20-day
         relative strength vs. the Nifty 50. Every condition must pass together. Results split into
         **Near Resistance**, **Consolidating**, and **Already Broken Out** (reference only, excluded from
         being a candidate). None of this predicts that any stock will break out on the next session — it
         only reports today's measured technical state.
+
+        Two pages run the exact same rule set over different universes: **"🎯 Upside Buy Movement"** scans
+        the Nifty 500 only; **"💹 Upside Buy Movement above 100"** scans all NSE stocks priced above ₹100
+        (NSE's broadest official list, "Nifty Total Market", as a practical stand-in for "all NSE stocks").
 
         **Watchlist**: persists across restarts (`data/watchlist.json`) — add/remove from any stock's
         detail panel.
