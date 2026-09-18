@@ -432,14 +432,26 @@ Top to bottom:
    Nifty / Sensex via `market_overview.get_indices_snapshot()`) and
    `render_watchlist_overview_card()` (latest price/status for every
    watchlisted ticker).
-5. `render_latest_opportunities_card()` -- top 10 Near-Resistance +
+5. `render_fifty_two_week_card()` -- two tabs, "New 52W High" / "New 52W
+   Low": Nifty 500 stocks whose latest session's High/Low actually
+   reached a new trailing-252-session extreme (not just "trading near"
+   one). Computed by `src/fifty_two_week.py`'s
+   `compute_fifty_two_week_lists()`, called from inside
+   `pre_breakout.scan_pre_breakout()` right after it downloads
+   `history` -- reusing that same already-downloaded universe OHLCV
+   rather than fetching the whole universe a second time for an
+   otherwise-unrelated Home widget. A ticker with fewer than 252
+   sessions of history is skipped entirely (no way to know its genuine
+   52-week extreme from a shorter window), rather than mislabeling a
+   shorter-window max/min as "52-week."
+6. `render_latest_opportunities_card()` -- top 10 Near-Resistance +
    Consolidating candidates by closeness to resistance, followed by an
    "📰 Indian Market News" caption (Yahoo Finance news for `^NSEI`, via
    `deep_dive.get_recent_news`).
-6. `render_recent_scan_history_card()` -- last 5 `scan_history` entries
+7. `render_recent_scan_history_card()` -- last 5 `scan_history` entries
    (Scan Time/Universe/Status/Matches; Status is always "✅ Completed"
    since `record()` only ever logs a scan that finished).
-7. The usual divider + "🔎 Selected Stock Analysis" + `render_detail_panel()`.
+8. The usual divider + "🔎 Selected Stock Analysis" + `render_detail_panel()`.
 
 ## Export
 

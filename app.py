@@ -616,6 +616,63 @@ def render_watchlist_overview_card():
             st.session_state.selected_ticker = watchlist_df.iloc[rows[0]]["Ticker"]
 
 
+def render_fifty_two_week_card():
+    with st.container(border=True):
+        st.markdown(
+            '<div class="card-header"><span class="badge-dot" style="background:#3ECF8E;"></span>'
+            "📈 52-Week High / Low</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Nifty 500 stocks whose latest session's High/Low actually reached a new 52-week (252-session) "
+            "extreme today -- not just stocks trading near one."
+        )
+        high_df = result.get("week52_high", pd.DataFrame())
+        low_df = result.get("week52_low", pd.DataFrame())
+
+        tab_high, tab_low = st.tabs([f"🚀 New 52W High ({len(high_df)})", f"🔻 New 52W Low ({len(low_df)})"])
+        with tab_high:
+            if high_df.empty:
+                st.info("No stocks matched your saved strategy in this scan.")
+            else:
+                order = ["Ticker", "Company Name", "Current Price", "52W High", "Change %"]
+                col_config = {
+                    "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                    "Company Name": st.column_config.TextColumn("Name"),
+                    "Current Price": st.column_config.NumberColumn("Price", format="₹%.2f"),
+                    "52W High": st.column_config.NumberColumn("52W High", format="₹%.2f"),
+                    "Change %": st.column_config.NumberColumn("Chg %", format="%+.2f%%"),
+                }
+                event = st.dataframe(
+                    high_df, hide_index=True, width="stretch", column_config=col_config,
+                    column_order=_visible(high_df, order), on_select="rerun", selection_mode="single-row",
+                    key="home_week52_high_table",
+                )
+                rows = event["selection"]["rows"]
+                if rows:
+                    st.session_state.selected_ticker = high_df.iloc[rows[0]]["Ticker"]
+        with tab_low:
+            if low_df.empty:
+                st.info("No stocks matched your saved strategy in this scan.")
+            else:
+                order = ["Ticker", "Company Name", "Current Price", "52W Low", "Change %"]
+                col_config = {
+                    "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                    "Company Name": st.column_config.TextColumn("Name"),
+                    "Current Price": st.column_config.NumberColumn("Price", format="₹%.2f"),
+                    "52W Low": st.column_config.NumberColumn("52W Low", format="₹%.2f"),
+                    "Change %": st.column_config.NumberColumn("Chg %", format="%+.2f%%"),
+                }
+                event = st.dataframe(
+                    low_df, hide_index=True, width="stretch", column_config=col_config,
+                    column_order=_visible(low_df, order), on_select="rerun", selection_mode="single-row",
+                    key="home_week52_low_table",
+                )
+                rows = event["selection"]["rows"]
+                if rows:
+                    st.session_state.selected_ticker = low_df.iloc[rows[0]]["Ticker"]
+
+
 def render_latest_opportunities_card():
     with st.container(border=True):
         st.markdown(
@@ -716,6 +773,7 @@ def render_detail_panel():
     )
     combined = pd.concat(
         [result["near_resistance"], result["consolidating"], result["already_broken_out"],
+         result.get("week52_high", pd.DataFrame()), result.get("week52_low", pd.DataFrame()),
          watchlist_df, *all_tables],
         ignore_index=True,
     )
@@ -1015,6 +1073,9 @@ if nav_page == "Home":
         render_market_overview_card()
     with wl_col:
         render_watchlist_overview_card()
+
+    st.write("")
+    render_fifty_two_week_card()
 
     # Default to the #1 candidate so the analysis section below is never
     # empty -- the user can still pick any other row via the tables above.

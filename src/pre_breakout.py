@@ -14,7 +14,7 @@ it only reports today's measured technical state.
 
 import pandas as pd
 
-from . import config, indicators, scanner, universe
+from . import config, fifty_two_week, indicators, scanner, universe
 
 
 def _find_resistance(df: pd.DataFrame) -> tuple[float | None, int | None]:
@@ -272,14 +272,31 @@ def scan_pre_breakout(
         if progress_callback and total:
             progress_callback(0.2 + 0.6 * (i + 1) / total, f"Evaluating {ticker}...")
 
+    # 52-week high/low reuses `history` (already downloaded above for the
+    # strategy itself) rather than fetching the universe a second time --
+    # this list is otherwise unrelated to the Upside Buy Movement rules,
+    # but the underlying OHLCV need is identical.
+    if progress_callback:
+        progress_callback(0.82, "Finding 52-week highs and lows...")
+    week52_high_df, week52_low_df = fifty_two_week.compute_fifty_two_week_lists(history, min_price)
+
     if progress_callback:
         progress_callback(0.85, "Fetching company info for candidates...")
-    all_tickers = sorted({r["Ticker"] for r in rows})
+    week52_tickers = set(week52_high_df["Ticker"]) | set(week52_low_df["Ticker"])
+    all_tickers = sorted({r["Ticker"] for r in rows} | week52_tickers)
     info_map = scanner.fetch_candidate_info(all_tickers) if all_tickers else {}
     for r in rows:
         info = info_map.get(r["Ticker"], {})
         r["Company Name"] = info.get("name") or r["Ticker"]
         r["Sector"] = info.get("sector") or "N/A"
+    if not week52_high_df.empty:
+        week52_high_df["Company Name"] = week52_high_df["Ticker"].map(
+            lambda t: info_map.get(t, {}).get("name") or t
+        )
+    if not week52_low_df.empty:
+        week52_low_df["Company Name"] = week52_low_df["Ticker"].map(
+            lambda t: info_map.get(t, {}).get("name") or t
+        )
 
     last_dates = [df.index[-1].date() for df in history.values() if len(df)]
     data_asof_date = max(last_dates) if last_dates else None
@@ -291,6 +308,8 @@ def scan_pre_breakout(
         "near_resistance": _build_table(rows, "Near Resistance"),
         "consolidating": _build_table(rows, "Consolidating"),
         "already_broken_out": _build_table(rows, "Already Broken Out"),
+        "week52_high": week52_high_df,
+        "week52_low": week52_low_df,
         "universe_size": len(tickers),
         "scanned": len(history),
         "min_price": min_price,
