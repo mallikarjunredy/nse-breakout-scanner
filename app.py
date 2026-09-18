@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-from src import config, deep_dive, detail, market_overview, pre_breakout, scan_history, watchlist
+from src import config, deep_dive, detail, market_overview, pre_breakout, rising_channel, scan_history, scanner, watchlist
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
 
@@ -104,6 +104,10 @@ if "pre_breakout_cache" not in st.session_state:
     st.session_state.pre_breakout_cache = None  # (timestamp, result) once a scan has run, else None
 if "pre_breakout_all_cache" not in st.session_state:
     st.session_state.pre_breakout_all_cache = None  # same, for the "above 100" all-NSE strategy
+if "rising_channel_cache" not in st.session_state:
+    st.session_state.rising_channel_cache = {}  # keyed by (universe_name, sorted(params.items()))
+if "rc_selected_ticker" not in st.session_state:
+    st.session_state.rc_selected_ticker = None
 if "watchlist_cache" not in st.session_state:
     st.session_state.watchlist_cache = {}
 if "selected_ticker" not in st.session_state:
@@ -230,7 +234,8 @@ st.markdown(
 
 _NAV_ITEMS = [
     ("Home", "🏠"), ("Upside Buy Movement", "🎯"), ("Upside Buy Movement above 100", "💹"),
-    ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
+    ("Daily Rising Channel", "📐"), ("Watchlist", "⭐"), ("Stock Analysis", "📈"),
+    ("Scan History", "🕐"), ("Help & Support", "❓"),
 ]
 
 with st.sidebar:
@@ -1197,6 +1202,244 @@ elif nav_page == "Upside Buy Movement above 100":
 
 
 # ---------------------------------------------------------------------------
+# Page: Daily Rising Channel (Pre-Breakout & Breakout Scanner)
+# ---------------------------------------------------------------------------
+
+_RC_COLUMN_ORDER = [
+    "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
+    "Resistance Level", "Support Level", "% Below Resistance", "RSI", "Volume Ratio",
+    "Channel Age", "Resistance Touches", "Support Touches",
+]
+_RC_COLUMN_CONFIG = {
+    "Rank": st.column_config.NumberColumn("Rank", width="small"),
+    "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+    "Company Name": st.column_config.TextColumn("Company Name"),
+    "Setup Status": st.column_config.TextColumn("Status", width="small"),
+    "Signal Date": st.column_config.TextColumn("Signal Date", width="small"),
+    "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
+    "Resistance Level": st.column_config.NumberColumn("Resistance", format="₹%.2f"),
+    "Support Level": st.column_config.NumberColumn("Support", format="₹%.2f"),
+    "% Below Resistance": st.column_config.NumberColumn("Distance %", format="%.2f%%"),
+    "RSI": st.column_config.NumberColumn("RSI14", format="%.1f"),
+    "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+    "Channel Age": st.column_config.NumberColumn("Channel Age (sessions)"),
+    "Resistance Touches": st.column_config.NumberColumn("R Touches"),
+    "Support Touches": st.column_config.NumberColumn("S Touches"),
+}
+
+
+def _render_rc_tab(df: pd.DataFrame, key_prefix: str):
+    if df.empty:
+        st.info("No stocks matched your saved strategy in this scan.")
+        return
+    _export_buttons(df, key_prefix, key_prefix)
+    event = st.dataframe(
+        df, hide_index=True, width="stretch", column_config=_RC_COLUMN_CONFIG,
+        column_order=[c for c in _RC_COLUMN_ORDER if c in df.columns],
+        on_select="rerun", selection_mode="single-row", key=f"{key_prefix}_table",
+    )
+    rows = event["selection"]["rows"]
+    if rows:
+        st.session_state.rc_selected_ticker = df.iloc[rows[0]]["Ticker"]
+
+
+if nav_page == "Daily Rising Channel":
+    st.markdown("### 📐 Daily Rising Channel — Pre-Breakout & Breakout Scanner")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "Uses split/dividend-adjusted daily closes (yfinance's standard back-adjustment: prices before a "
+        "split/dividend are scaled so the ex-date shows no artificial gap) and only completed daily "
+        "candles -- a breakout is never confirmed on an unfinished session. Fits an upward-sloping price "
+        "channel and classifies each candidate as approaching its resistance (Pre-Breakout Watchlist) or "
+        "already closing above it (Confirmed Breakout / Breakout — Volume Unconfirmed, depending on "
+        "whether volume backed the move). Rule-based scanner matches, not guaranteed profitable "
+        "recommendations -- proximity to resistance does not guarantee a breakout."
+    )
+
+    rc_universe_options = ["Nifty 500", "All NSE Stocks (₹50+)"]
+    rc_universe_label_choice = st.radio(
+        "Universe", rc_universe_options, horizontal=True, key="rc_universe",
+    )
+    rc_universe_name = "nifty500" if rc_universe_label_choice == "Nifty 500" else "all_nse"
+    st.caption(f"✅ Mandatory: closing price > ₹{config.RISING_CHANNEL_MIN_PRICE_INR:.0f}.")
+
+    with st.expander("⚙️ Adjust Thresholds"):
+        c1, c2, c3 = st.columns(3)
+        rc_touch_tol = c1.slider(
+            "Touch Tolerance (× ATR14)", 0.1, 2.0, config.RISING_CHANNEL_TOUCH_TOLERANCE_ATR_MULT, 0.1,
+            key="rc_touch_tol", help="How close a swing point must be to the fitted line to count as a touch.",
+        )
+        rc_parallel_tol = c2.slider(
+            "Parallelism Tolerance (%)", 5.0, 60.0, config.RISING_CHANNEL_PARALLEL_TOLERANCE_PCT, 5.0,
+            key="rc_parallel_tol", help="Max allowed relative difference between the resistance and support slopes.",
+        )
+        rc_containment = c3.slider(
+            "Min. Containment (%)", 50.0, 100.0, config.RISING_CHANNEL_MIN_CONTAINMENT_PCT, 5.0,
+            key="rc_containment", help="% of closes across the fitted window that must sit within the channel band.",
+        )
+        c4, c5, c6 = st.columns(3)
+        rc_lookback = c4.slider(
+            "Lookback Window (sessions)", 20, 150,
+            (config.RISING_CHANNEL_LOOKBACK_MIN, config.RISING_CHANNEL_LOOKBACK_MAX), 10, key="rc_lookback",
+        )
+        rc_rsi = c5.slider(
+            "Pre-Breakout RSI Range", 0, 100,
+            (int(config.RISING_CHANNEL_PREBREAKOUT_RSI_MIN), int(config.RISING_CHANNEL_PREBREAKOUT_RSI_MAX)),
+            key="rc_rsi",
+        )
+        rc_distance = c6.slider(
+            "Distance to Resistance (%)", 0.0, 15.0,
+            (config.RISING_CHANNEL_PREBREAKOUT_DISTANCE_MIN_PCT, config.RISING_CHANNEL_PREBREAKOUT_DISTANCE_MAX_PCT),
+            0.5, key="rc_distance",
+        )
+        c7, c8 = st.columns(2)
+        rc_vol_mult = c7.slider(
+            "Breakout Volume Multiplier", 1.0, 4.0, config.RISING_CHANNEL_BREAKOUT_VOLUME_MULT, 0.1,
+            key="rc_vol_mult",
+        )
+        rc_min_touches = c8.slider(
+            "Min. Touches per Boundary", 2, 6, config.RISING_CHANNEL_MIN_TOUCHES, 1, key="rc_min_touches",
+        )
+        c9, c10 = st.columns(2)
+        rc_use_range_filter = c9.checkbox(
+            "Optional: require range contraction (10D range < preceding 30D range)",
+            value=False, key="rc_range_filter",
+        )
+        rc_use_volume_filter = c10.checkbox(
+            "Optional: require volume contraction (5D avg volume < preceding 60D avg)",
+            value=False, key="rc_volume_filter",
+        )
+
+    rc_params = rising_channel.default_params()
+    rc_params.update({
+        "touch_tolerance_atr_mult": rc_touch_tol,
+        "parallel_tolerance_pct": rc_parallel_tol,
+        "min_containment_pct": rc_containment,
+        "lookback_min": rc_lookback[0],
+        "lookback_max": rc_lookback[1],
+        "prebreakout_rsi_min": float(rc_rsi[0]),
+        "prebreakout_rsi_max": float(rc_rsi[1]),
+        "prebreakout_distance_min_pct": rc_distance[0],
+        "prebreakout_distance_max_pct": rc_distance[1],
+        "breakout_volume_mult": rc_vol_mult,
+        "min_touches": rc_min_touches,
+        "use_range_contraction_filter": rc_use_range_filter,
+        "use_volume_contraction_filter": rc_use_volume_filter,
+    })
+    rc_cache_key = (rc_universe_name, tuple(sorted(rc_params.items())))
+
+    rc_cache = st.session_state.rising_channel_cache.get(rc_cache_key)
+    run_rc_clicked = st.button("▶️ Run Rising Channel Scan", type="primary", key="run_rising_channel")
+
+    if run_rc_clicked or rc_cache is None:
+        rc_progress = st.progress(0, text="Starting scan...")
+
+        def _on_rc_progress(frac, text_):
+            rc_progress.progress(min(frac, 1.0), text=text_)
+
+        with st.spinner(f"Scanning {rc_universe_label_choice} for Daily Rising Channel setups..."):
+            result_rc = rising_channel.scan_rising_channel(
+                universe_name=rc_universe_name, min_price=config.RISING_CHANNEL_MIN_PRICE_INR,
+                params=rc_params, progress_callback=_on_rc_progress,
+            )
+        rc_progress.empty()
+        st.session_state.rising_channel_cache[rc_cache_key] = (time.time(), result_rc)
+    else:
+        result_rc = rc_cache[1]
+
+    rc_scan_time = st.session_state.rising_channel_cache[rc_cache_key][0]
+    rc_scan_label = datetime.datetime.fromtimestamp(rc_scan_time, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
+    rc_asof = result_rc.get("data_asof_date")
+    rc_asof_label = rc_asof.strftime("%d %b %Y") if rc_asof else "N/A"
+    st.caption(
+        f"Last scanned: {rc_scan_label} · Latest completed candle: {rc_asof_label} · "
+        f"Universe: {result_rc['universe_label']} ({result_rc['universe_size']} instruments) · "
+        f"Scanned OK: {result_rc['scanned']}"
+    )
+    rc_next_refresh_in = config.SCAN_CACHE_TTL_SECONDS - (time.time() - rc_scan_time)
+    if rc_next_refresh_in <= 0:
+        st.caption("⏳ This data may be stale -- use ▶️ Run Rising Channel Scan for the latest.")
+
+    rc_flags = []
+    if result_rc["insufficient_history_count"]:
+        rc_flags.append(
+            f"{result_rc['insufficient_history_count']} candidate(s) have under "
+            f"{config.RISING_CHANNEL_MIN_HISTORY_SESSIONS} sessions of history"
+        )
+    if result_rc["missing_volume_count"]:
+        rc_flags.append(f"{result_rc['missing_volume_count']} candidate(s) have missing/zero recent volume")
+    if result_rc["stale_data_count"]:
+        rc_flags.append(f"{result_rc['stale_data_count']} candidate(s) have stale (>5 day old) data")
+    if rc_flags:
+        st.warning("⚠️ " + "; ".join(rc_flags) + ".")
+
+    rc_sort_options = {
+        "Distance to Resistance": ("% Below Resistance", True),
+        "Volume Ratio": ("Volume Ratio", False),
+        "Channel Quality (Resistance Touches)": ("Resistance Touches", False),
+    }
+    rc_sort_label = st.selectbox("Sort results by", list(rc_sort_options.keys()), key="rc_sort")
+    rc_sort_col, rc_sort_default_asc = rc_sort_options[rc_sort_label]
+    rc_sort_asc = st.checkbox("Ascending", value=rc_sort_default_asc, key="rc_sort_asc")
+
+    def _rc_sorted(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty or rc_sort_col not in df.columns:
+            return df
+        return df.sort_values(rc_sort_col, ascending=rc_sort_asc, na_position="last")
+
+    pre_df_rc = _rc_sorted(result_rc["pre_breakout"])
+    confirmed_df_rc = _rc_sorted(result_rc["confirmed_breakout"])
+    unconfirmed_df_rc = _rc_sorted(result_rc["volume_unconfirmed"])
+
+    tab_pre_rc, tab_confirmed_rc, tab_unconfirmed_rc = st.tabs([
+        f"👀 Pre-Breakout Watchlist ({len(pre_df_rc)})",
+        f"🚀 Confirmed Breakouts ({len(confirmed_df_rc)})",
+        f"⚠️ Breakout — Volume Unconfirmed ({len(unconfirmed_df_rc)})",
+    ])
+    with tab_pre_rc:
+        st.caption("Inside a valid rising channel, within the configured distance below resistance. Not a guaranteed breakout.")
+        _render_rc_tab(pre_df_rc, "rc_pre")
+    with tab_confirmed_rc:
+        st.caption("Closed above the channel's projected resistance, on the required volume.")
+        _render_rc_tab(confirmed_df_rc, "rc_confirmed")
+    with tab_unconfirmed_rc:
+        st.caption("Same price breakout, but volume didn't confirm it -- treat with extra caution.")
+        _render_rc_tab(unconfirmed_df_rc, "rc_unconfirmed")
+
+    st.divider()
+    st.markdown("#### 📊 Selected Candidate Chart")
+    rc_ticker = st.session_state.rc_selected_ticker
+    if not rc_ticker:
+        st.caption("👆 Click a row in any table above to see its channel chart here.")
+    else:
+        rc_channel = result_rc["channels"].get(rc_ticker)
+        rc_signal_idx = result_rc["signal_idx"].get(rc_ticker)
+        if rc_channel is None or rc_signal_idx is None:
+            st.caption(f"No channel data for {rc_ticker} under the current scan -- select a row above again.")
+        else:
+            with st.spinner(f"Loading chart for {rc_ticker}..."):
+                rc_chart_history = scanner.download_history([rc_ticker], auto_adjust=True)
+            rc_chart_df = rc_chart_history.get(rc_ticker)
+            if rc_chart_df is None:
+                st.caption("Price history unavailable for this ticker right now.")
+            else:
+                rc_fig = rising_channel.build_channel_chart(rc_chart_df, rc_channel, rc_signal_idx, rc_ticker)
+                st.plotly_chart(rc_fig, width="stretch")
+                st.caption(
+                    "Blue solid = resistance, blue dotted = support (both sloped, fit only from data "
+                    "available at signal time -- historical signals don't change when later data arrives). "
+                    "Red ▽ = swing high, green △ = swing low used to fit the lines. Orange marker = the "
+                    "pre-breakout/breakout signal candle."
+                )
+
+    st.caption(
+        "Rule-based scanner matches, not guaranteed profitable recommendations. A wick above resistance "
+        "with a close below it is never treated as a breakout. Not investment advice."
+    )
+    render_footer(scan_ts=rc_scan_time)
+
+
+# ---------------------------------------------------------------------------
 # Page: Watchlist
 # ---------------------------------------------------------------------------
 
@@ -1277,6 +1520,14 @@ elif nav_page == "Help & Support":
         Two pages run the exact same rule set over different universes: **"🎯 Upside Buy Movement"** scans
         the Nifty 500 only; **"💹 Upside Buy Movement above 100"** scans all NSE stocks priced above ₹100
         (NSE's broadest official list, "Nifty Total Market", as a practical stand-in for "all NSE stocks").
+
+        **"📐 Daily Rising Channel"** is a separate, adjustable strategy: it fits an upward-sloping
+        support/resistance channel to confirmed swing highs/lows on the daily chart and looks for stocks
+        either approaching that channel's resistance (**Pre-Breakout Watchlist**) or already closing above
+        it (**Confirmed Breakout**, or **Breakout — Volume Unconfirmed** if volume didn't back the move).
+        Uses split/dividend-adjusted prices and only completed daily candles. Unlike the two Upside Buy
+        Movement pages, every threshold here (touch tolerance, parallelism, containment, RSI range,
+        distance to resistance, volume multiplier, lookback window) is adjustable from the page itself.
 
         **Watchlist**: persists across restarts (`data/watchlist.json`) — add/remove from any stock's
         detail panel.

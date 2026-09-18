@@ -306,6 +306,111 @@ EMA20/EMA50/RSI/ATR%/Volume Ratio/Consolidation Days/Relative Strength
 instead, and the price chart overlays only the Resistance level (no
 Support line, since this strategy doesn't compute one).
 
+## Third strategy: "Daily Rising Channel: Pre-Breakout & Breakout Scanner"
+
+A third, independent strategy (`src/rising_channel.py`, page "📐 Daily
+Rising Channel") -- unlike the two Upside Buy Movement pages, this one
+is designed to be **adjustable from the UI** (an "⚙️ Adjust Thresholds"
+expander with sliders for touch tolerance, parallelism tolerance,
+containment %, lookback window, RSI range, distance-to-resistance band,
+breakout volume multiplier, and minimum touch count, plus two optional
+filter checkboxes). Its scan cache
+(`st.session_state.rising_channel_cache`) is therefore keyed by
+`(universe_name, tuple(sorted(params.items())))` -- changing any slider
+is a cache miss and triggers a fresh scan on that combination, the same
+auto-scan-on-cache-miss pattern the old (deleted) adjustable strategy
+used. It is NOT logged to `scan_history` -- that log's schema
+(`near_resistance`/`consolidating`/`already_broken_out` counts) belongs
+to the Upside Buy Movement strategy and forcing this differently-shaped
+strategy into it would mislabel the counts.
+
+**Universe**: Nifty 500 or all NSE stocks (`universe.get_nse_all()`),
+user's choice, with closing price > `config.RISING_CHANNEL_MIN_PRICE_INR`
+(₹50 -- a different, lower floor than Upside Buy Movement's ₹100).
+Downloads **split/dividend-adjusted** OHLC
+(`scanner.download_history(tickers, auto_adjust=True)` -- yfinance's
+standard back-adjustment method: prices before a split/dividend are
+scaled down by the split ratio so the ex-date shows no artificial gap)
+specifically so a stock split doesn't fake a channel breakdown; the
+other two strategies still use raw (unadjusted) prices, unchanged.
+
+**Channel detection** (`find_swing_points` / `_try_channel` /
+`select_best_channel`):
+
+- A swing high at position i requires High[i] to strictly exceed the
+  High of `pivot_n` (default 3) bars on *both* sides -- swing low
+  mirrors this on Low. A swing only exists in the result once `pivot_n`
+  bars after it are present in the data passed in, which is what makes
+  this leak-free: pass only data "as of" the date being evaluated, and
+  the last `pivot_n` bars simply never produce a pivot yet.
+- Searches window lengths from `lookback_min` to `lookback_max` (step
+  `lookback_step`), every window ending at the same "as of" index, and
+  fits a least-squares line to that window's swing highs (resistance)
+  and swing lows (support).
+- Hard requirements per window: both slopes positive; slopes parallel
+  within `parallel_tolerance_pct` (relative difference vs. their
+  average magnitude); at least `min_touches` swing points per boundary
+  actually within `touch_tolerance_atr_mult × ATR14` of their fitted
+  line, each pair at least `min_touch_separation` sessions apart;
+  resistance strictly above support at every index in the window; at
+  least `min_containment_pct` of closes within the tolerance-widened
+  band.
+- Among windows that pass, picks the highest deterministic `score`
+  (touch count + containment % − fit-error % + a small bonus for the
+  preferred higher-high/higher-low shape) -- see `_try_channel`'s
+  docstring for the exact formula. No valid window -> `None` ("No valid
+  channel"), and that ticker simply doesn't appear in any result table.
+
+**Pre-Breakout Watchlist**: today's own channel (searched with
+`as_of_idx` = today) with today's close at/below its projected
+resistance, `prebreakout_distance_min/max_pct` (default 0-3%) below it,
+close above rising SMA20 *and* SMA50 (vs. `sma_rising_lookback`, default
+5, sessions ago), RSI(14) in `prebreakout_rsi_min/max` (default 50-65).
+The two optional filters (10D range narrower than the preceding 30D;
+5D avg volume below the preceding 60D avg) only apply when their
+checkbox is on.
+
+**Confirmed Breakout / Breakout — Volume Unconfirmed**: the channel is
+searched with `as_of_idx` = *yesterday* and its slope/intercept frozen
+-- "freezing" just means the same two numbers get reused to project a
+resistance value at *today's* index, never refit including today's bar.
+Requires yesterday's close at/below that frozen resistance (wasn't
+already through it), and today's close above the *projected* resistance
+by at least `max(breakout_min_pct% of resistance, breakout_atr_mult ×
+yesterday's ATR14)`. If today's volume is also >= `breakout_volume_mult`
+times the prior `breakout_volume_avg_period`-session average (today
+excluded), it's a **Confirmed Breakout**; the identical price condition
+without that volume confirmation is a **Breakout — Volume Unconfirmed**
+row instead -- both computed in the same pass, never silently dropped.
+A wick above resistance with a close below it fails the close-based
+price condition and produces neither row, by construction (High is
+never compared to resistance for this decision, only Close).
+
+**Charting** (`rising_channel.build_channel_chart`): a 3-row Plotly
+subplot (price+lines+swings+SMA20/50 / Volume / RSI14), built on demand
+for whichever row the user selects (`st.session_state.rc_selected_ticker`
+-- a page-local selection, deliberately NOT the shared
+`selected_ticker`/`render_detail_panel()` used by the other two
+strategies, since their chart only draws a flat resistance line and has
+no concept of sloped channels or swing markers). The channel/signal-index
+data needed to draw it comes from the scan result's `channels`/
+`signal_idx` dicts (keyed by ticker); the underlying OHLC for the chart
+itself is fetched on demand for just that one ticker
+(`scanner.download_history([ticker], auto_adjust=True)`) rather than
+kept in memory for the whole scanned universe. The resistance/support
+lines are drawn out to whichever is later, the channel's own fitted end
+or the signal index, so a frozen (yesterday-fit) breakout channel's
+projected level at the signal candle is visible, not just its
+historical fit -- and, since the lines are stored as fixed slope/
+intercept numbers from the moment of the scan, a historical signal's
+chart never changes shape when later data arrives.
+
+This strategy is not integrated with the Watchlist/search box (those
+remain scoped to `pre_breakout.py`'s Upside Buy Movement evaluator) and
+is not logged to Scan History, both deliberate scope decisions given
+how differently shaped its rows and its "channel" concept are from the
+other two strategies' rows.
+
 ## Home page layout
 
 Top to bottom:

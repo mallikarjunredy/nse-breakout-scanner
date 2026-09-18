@@ -30,6 +30,11 @@ def compute_ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
 
+def compute_sma(series: pd.Series, period: int) -> pd.Series:
+    """Standard simple moving average."""
+    return series.rolling(period).mean()
+
+
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Wilder's Average True Range: an EWM of the True Range (the largest
     of today's High-Low, |High - yesterday's Close|, |Low - yesterday's

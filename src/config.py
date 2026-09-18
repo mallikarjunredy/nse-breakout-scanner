@@ -1,6 +1,8 @@
-"""Central configuration for the "Upside Buy Movement" strategy -- the
-app's only strategy. Every threshold here is fixed (not user-adjustable
-from the UI); change values here rather than hardcoding elsewhere.
+"""Central configuration for this app's strategies. Most values here are
+fixed (Upside Buy Movement has nothing user-adjustable); the
+RISING_CHANNEL_* block is the one exception -- those are just the
+*default* slider values shown on that strategy's page, since its own
+spec explicitly asks for adjustable thresholds.
 """
 
 from pathlib import Path
@@ -57,3 +59,35 @@ PRE_BREAKOUT_VOLUME_AVG_SHORT = 5
 PRE_BREAKOUT_VOLUME_AVG_LONG = 20
 PRE_BREAKOUT_RELATIVE_STRENGTH_DAYS = 20
 PRE_BREAKOUT_BENCHMARK_INDEX = "^NSEI"  # Nifty 50 -- no reliable free Nifty 500 index feed on Yahoo
+
+# "Daily Rising Channel: Pre-Breakout & Breakout Scanner" -- see
+# src/rising_channel.py. These are *default* values for the page's
+# adjustable-threshold widgets, not fixed rules -- unlike the
+# PRE_BREAKOUT_* block above, the user can change all of these live.
+RISING_CHANNEL_MIN_PRICE_INR = 50.0
+RISING_CHANNEL_MIN_HISTORY_SESSIONS = 250
+RISING_CHANNEL_PIVOT_N = 3  # candles required on each side to confirm a swing point
+RISING_CHANNEL_LOOKBACK_MIN = 40
+RISING_CHANNEL_LOOKBACK_MAX = 120
+RISING_CHANNEL_LOOKBACK_STEP = 10  # granularity of the window search between MIN and MAX
+RISING_CHANNEL_MIN_TOUCHES = 3  # per boundary
+RISING_CHANNEL_MIN_TOUCH_SEPARATION = 5  # sessions between two touches on the same boundary
+RISING_CHANNEL_TOUCH_TOLERANCE_ATR_MULT = 0.5
+RISING_CHANNEL_PARALLEL_TOLERANCE_PCT = 30.0  # |slope_r - slope_s| / avg(|slope_r|,|slope_s|), as a %
+RISING_CHANNEL_MIN_CONTAINMENT_PCT = 80.0  # % of closes that must sit within the channel band
+RISING_CHANNEL_ATR_PERIOD = 14
+RISING_CHANNEL_PREBREAKOUT_DISTANCE_MIN_PCT = 0.0
+RISING_CHANNEL_PREBREAKOUT_DISTANCE_MAX_PCT = 3.0
+RISING_CHANNEL_PREBREAKOUT_RSI_MIN = 50.0
+RISING_CHANNEL_PREBREAKOUT_RSI_MAX = 65.0
+RISING_CHANNEL_SMA_FAST = 20
+RISING_CHANNEL_SMA_SLOW = 50
+RISING_CHANNEL_SMA_RISING_LOOKBACK = 5  # sessions back, for the "both SMAs rising" check
+RISING_CHANNEL_RANGE_RECENT_DAYS = 10  # optional filter: recent range narrower than prior range
+RISING_CHANNEL_RANGE_PRIOR_DAYS = 30
+RISING_CHANNEL_VOLUME_RECENT_DAYS = 5  # optional filter: volume contraction
+RISING_CHANNEL_VOLUME_PRIOR_DAYS = 60
+RISING_CHANNEL_BREAKOUT_MIN_PCT = 0.5  # "0.5% of resistance" minimum clearance
+RISING_CHANNEL_BREAKOUT_ATR_MULT = 0.25
+RISING_CHANNEL_BREAKOUT_VOLUME_MULT = 1.5
+RISING_CHANNEL_BREAKOUT_VOLUME_AVG_PERIOD = 20

@@ -12,9 +12,18 @@ import yfinance as yf
 from . import config
 
 
-def download_history(tickers: list[str]) -> dict:
+def download_history(tickers: list[str], auto_adjust: bool = False) -> dict:
     """Bulk-downloads daily OHLCV for all tickers and returns a dict of
     ticker -> per-ticker DataFrame (only tickers with usable data included).
+
+    `auto_adjust=True` returns yfinance's split/dividend-back-adjusted
+    OHLC (its standard adjustment method: prior prices are scaled down by
+    the split ratio / dividend factor so there's no artificial gap on the
+    ex-date) instead of raw prices -- needed by strategies that fit
+    multi-month price geometry (e.g. the Rising Channel strategy), where
+    an unadjusted split would otherwise look like a false breakdown.
+    Defaults to False since the other strategies were built and tested
+    against raw prices and changing that now would be an unrelated risk.
     """
     raw = yf.download(
         tickers,
@@ -23,7 +32,7 @@ def download_history(tickers: list[str]) -> dict:
         group_by="ticker",
         threads=True,
         progress=False,
-        auto_adjust=False,
+        auto_adjust=auto_adjust,
     )
 
     result = {}
