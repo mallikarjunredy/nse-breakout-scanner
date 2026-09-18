@@ -411,6 +411,85 @@ is not logged to Scan History, both deliberate scope decisions given
 how differently shaped its rows and its "channel" concept are from the
 other two strategies' rows.
 
+## Fourth strategy: "Daily Trend + Consolidation Breakout" (+ its backtest)
+
+`src/trend_consolidation.py`, two pages: "🧭 Daily Trend + Consolidation"
+(live scan) and "🧪 Trend + Consolidation Backtest" (walk-forward paper
+trading over the same rules). Adjustable from the UI, like Rising
+Channel; unlike it, resistance/support here is a **flat** number (the
+highest High / lowest Low over a fixed trailing window), not a fitted
+sloped line -- much simpler geometry, but the same causal-computation
+discipline matters just as much because this strategy also drives a
+real backtest.
+
+**The one core design decision that makes both the live scan and the
+backtest correct and consistent**: `_compute_signal_frame(df, ...)` is
+a single vectorized function, called identically by both. Every rolling
+calculation is `.shift(1)` *before* `.rolling(...)`, so day T's own bar
+never contributes to its own resistance/support/volume-baseline/ADTV --
+this is what "never include the breakout candle when calculating its
+resistance" means in code, and it holds for every single day in a
+ticker's history at once, not just "today." The live scan just reads
+the last row of this frame; the backtest (`generate_backtest_signals`)
+reads every historical `confirmed_breakout_ok == True` row. There is
+exactly one place the strategy's rules live.
+
+**Live scan requirements** (all must hold, `_compute_signal_frame`):
+Nifty 50 close > its own SMA200 (`benchmark_available=False` and *zero*
+candidates shown, never a silent pass, if the index download fails);
+stock close > SMA50 > SMA200, SMA50 above its value
+`sma_fast_rising_lookback` (10) sessions ago; stock's `relative_strength_days`
+(63) -session return > Nifty 50's own; 20-session average traded value
+(Close × Volume, shift(1)'d) > `min_traded_value` (₹10 crore); resistance/
+support = max(High)/min(Low) over the `consolidation_period` (15)
+sessions strictly before today; consolidation width % ≤ `max_width_pct`
+(8%). **Pre-Breakout Watchlist** adds: close ≤ resistance, distance
+between `prebreakout_distance_min/max_pct` (0-3%). **Confirmed
+Breakout** adds: yesterday's close ≤ resistance (checked explicitly per
+the spec, though for this fixed-window definition it's true by
+construction), close ≥ resistance × (1 + `breakout_buffer_pct`/100),
+volume ≥ `volume_multiplier` × the preceding 20-session average
+(signal day excluded). The identical price condition without the volume
+confirmation is **Price Breakout — Volume Unconfirmed** instead of
+being dropped.
+
+**Backtest** (`generate_backtest_signals` / `run_backtest` /
+`compute_metrics` / `run_full_backtest`): every historical Confirmed
+Breakout date becomes a candidate entry at the *next* session's open,
+skipped if that open is > `entry_gap_max_pct` (2%) above the signal
+close or at/below the signal's resistance. Position size risks
+`risk_pct` (0.5%) of *current* equity per trade, capped by available
+cash (no leverage); stop = entry − `stop_atr_mult` (2) × signal-day
+ATR14; target = entry + `target_rr_mult` (2) × the initial per-share
+risk; time-exit at the close of session `max_holding_sessions` (20,
+entry day = session 1). Gap-through-the-stop exits at the day's open,
+not the unreachable stop price. A day with both stop and target touched
+(High ≥ target AND Low ≤ stop) has no way to know the true intra-day
+order from daily OHLC alone -- resolved as a stop-out and flagged
+(`ambiguous_stop_target=True`, surfaced in the UI and counted in
+`compute_metrics`'s `ambiguous_count`) rather than guessed either way.
+One open position per ticker; when several signals compete for cash on
+the same entry day, the deterministic (documented, not random)
+allocation order is strongest volume ratio first, ticker alphabetical
+as the tie-break. Brokerage/transaction-charges/slippage are each a
+configurable % applied per side. The development and out-of-sample
+periods run as **two fully independent simulations** (each starting
+fresh from `initial_equity`) specifically so a position opened near the
+boundary date can never blend dev-period state into the out-of-sample
+report.
+
+**Survivorship bias, disclosed not fixed**: the backtest applies
+*today's* Nifty 500 / All-NSE membership list to every past date, since
+no free historical point-in-time membership snapshot exists for either
+index. A stock removed from the index during the backtest window is
+still treated as a member for dates before its removal (and a stock
+added recently is treated as a member even before it actually joined).
+The backtest page states this plainly rather than attempting to correct
+for it. Similarly, the UI states outright that these are "a starting
+hypothesis, not a proven profitable strategy" and never reports a
+"success rate" framed as a probability of profit -- the live scan's
+"Why Qualified" explains which rules matched, nothing more.
+
 ## Home page layout
 
 Top to bottom:

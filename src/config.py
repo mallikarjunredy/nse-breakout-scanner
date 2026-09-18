@@ -91,3 +91,34 @@ RISING_CHANNEL_BREAKOUT_MIN_PCT = 0.5  # "0.5% of resistance" minimum clearance
 RISING_CHANNEL_BREAKOUT_ATR_MULT = 0.25
 RISING_CHANNEL_BREAKOUT_VOLUME_MULT = 1.5
 RISING_CHANNEL_BREAKOUT_VOLUME_AVG_PERIOD = 20
+
+# "Daily Trend + Consolidation Breakout" -- see src/trend_consolidation.py.
+# Like RISING_CHANNEL_*, these are adjustable *defaults*, not fixed rules.
+TREND_CONSOL_MIN_PRICE_INR = 100.0
+TREND_CONSOL_MIN_HISTORY_SESSIONS = 300
+TREND_CONSOL_MIN_TRADED_VALUE_INR = 10_00_00_000.0  # ₹10 crore, close × volume, 20-session average
+TREND_CONSOL_TRADED_VALUE_AVG_DAYS = 20
+TREND_CONSOL_SMA_FAST = 50
+TREND_CONSOL_SMA_SLOW = 200
+TREND_CONSOL_SMA_FAST_RISING_LOOKBACK = 10  # sessions back, for the "SMA50 rising" check
+TREND_CONSOL_RELATIVE_STRENGTH_DAYS = 63
+TREND_CONSOL_CONSOLIDATION_PERIOD = 15  # sessions, excluding the evaluation candle
+TREND_CONSOL_MAX_WIDTH_PCT = 8.0
+TREND_CONSOL_PREBREAKOUT_DISTANCE_MIN_PCT = 0.0
+TREND_CONSOL_PREBREAKOUT_DISTANCE_MAX_PCT = 3.0
+TREND_CONSOL_BREAKOUT_BUFFER_PCT = 0.5  # close must clear resistance by at least this %
+TREND_CONSOL_VOLUME_AVG_DAYS = 20  # excluding the signal candle
+TREND_CONSOL_VOLUME_MULTIPLIER = 1.5
+TREND_CONSOL_ATR_PERIOD = 14
+TREND_CONSOL_BENCHMARK_INDEX = "^NSEI"  # Nifty 50
+
+# Paper-trading / backtest defaults for the same strategy.
+TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital
+TREND_CONSOL_BACKTEST_RISK_PCT = 0.5  # % of current equity risked per trade
+TREND_CONSOL_BACKTEST_STOP_ATR_MULT = 2.0
+TREND_CONSOL_BACKTEST_TARGET_RR_MULT = 2.0  # target = entry + this x the initial per-share risk
+TREND_CONSOL_BACKTEST_MAX_HOLDING_SESSIONS = 20  # entry day counts as session 1
+TREND_CONSOL_BACKTEST_ENTRY_GAP_MAX_PCT = 2.0  # skip entry if next open is more than this % above signal close
+TREND_CONSOL_BACKTEST_BROKERAGE_PCT = 0.03  # per side, % of trade value
+TREND_CONSOL_BACKTEST_TRANSACTION_CHARGES_PCT = 0.10  # STT/exchange/other charges, per side, % of trade value
+TREND_CONSOL_BACKTEST_SLIPPAGE_PCT = 0.05  # per side, % of fill price
