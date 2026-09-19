@@ -594,28 +594,9 @@ def _select_from_watchlist_table(df: pd.DataFrame, key: str):
 # ---------------------------------------------------------------------------
 
 def render_home_header():
-    scan_label = datetime.datetime.fromtimestamp(scan_time, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
-    asof = result.get("data_asof_date")
-    partial_note = ""
-    if asof:
-        asof_label = asof.strftime("%d %b %Y")
-        today_ist = datetime.datetime.now(IST).date()
-        if asof == today_ist and market_is_open:
-            partial_note = (
-                ' <span style="color:#FFB020;">⚠️ Today\'s session is still open — the latest daily '
-                "candle may still be forming, not a confirmed close.</span>"
-            )
-    else:
-        asof_label = "N/A"
-
     st.markdown(
         '<div class="home-hero">'
         '<div class="home-hero-title">👋 Welcome, Mallikarjun</div>'
-        '<div class="home-hero-sub">Your Upside Buy Movement pre-breakout watchlist for the Nifty 500.</div>'
-        '<div class="home-hero-tagline">📈 Discipline today, better trades tomorrow.</div>'
-        '<div class="meta-text" style="text-align:left; margin-top:0.4rem;">'
-        f"📡 Yahoo Finance · End-of-day data &nbsp;·&nbsp; Prices as of {asof_label} close "
-        f"&nbsp;·&nbsp; Scan: {scan_label}{partial_note}</div>"
         "</div>",
         unsafe_allow_html=True,
     )
