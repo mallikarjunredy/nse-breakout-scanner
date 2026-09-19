@@ -603,3 +603,14 @@ platforms or machines that don't need it.
   testable in isolation.
 - Prefer Streamlit's `width="stretch"` over the deprecated
   `use_container_width=True` (removed after 2025-12-31).
+- **Tag every feature commit.** After committing and pushing a feature
+  (a new strategy, a page, a meaningful behavior change -- not every
+  tiny copy/threshold tweak), create an annotated git tag on that commit
+  and push it too: `git tag -a v<NN>-<short-kebab-name> <commit> -m "<what
+  it added>"` then `git push origin --tags`. Numbers increment from
+  whatever the highest existing `vNN-*` tag is (currently up to
+  `v17-rsi-chart-panel`). This is a standing user preference so GitHub
+  always has a named, permanent checkpoint for "the app right after
+  feature X" -- distinct from Streamlit Community Cloud's deploy, which
+  only ever tracks `master`'s moving HEAD and has no per-feature
+  versioning of its own.
