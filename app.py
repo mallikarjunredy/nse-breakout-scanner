@@ -226,19 +226,6 @@ st.markdown(
         background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
         color: #CFE3F5; font-size: 0.82rem; font-weight: 600; white-space: nowrap;
     }
-    .ticker-tape-wrap {
-        width: 100%; overflow-x: auto; white-space: nowrap; padding: 0.5rem 0.2rem;
-        margin-bottom: 0.6rem; border-top: 1px solid rgba(255,255,255,0.08);
-        border-bottom: 1px solid rgba(255,255,255,0.08);
-    }
-    .ticker-chip {
-        display: inline-block; padding: 0.2rem 1rem; font-size: 0.82rem; color: #CFE3F5;
-        border-right: 1px solid rgba(255,255,255,0.08);
-    }
-    .ticker-chip:last-child { border-right: none; }
-    .ticker-chip b { color: #EAF2FA; margin-right: 0.35rem; }
-    .tt-positive { color: #3ECF8E; font-weight: 600; }
-    .tt-negative { color: #FF6B6B; font-weight: 600; }
     .nav-tagline {
         margin-top: 1rem; padding: 0.9rem; border-radius: 12px;
         background: linear-gradient(135deg, rgba(79,209,232,0.14), rgba(28,37,65,0.4));
@@ -332,48 +319,52 @@ def _get_ticker_tape_data(wl_tuple: tuple):
 
 def render_ticker_tape():
     """Top market ticker strip: Nifty 50 / Bank Nifty / Sensex first, then
-    the user's own watchlist -- shown below the header on every page. The
-    strip itself is plain (non-clickable) HTML; a real selectbox next to it
-    is the actual "click an instrument to load its chart" control, since
-    HTML styled to look clickable without a real click handler is a known
-    bug class in this app (see CLAUDE.md).
+    the user's own watchlist -- shown below the header on every page. Each
+    instrument is a real st.button (not styled-to-look-clickable HTML, a
+    known bug class in this app -- see CLAUDE.md) so clicking it directly
+    loads that instrument in the chart pane below, matching the original
+    "clicking an instrument loads its chart" requirement one-for-one.
+    Streamlit can't scroll a row of buttons horizontally the way plain HTML
+    can, so a wide watchlist wraps onto additional rows instead of scrolling
+    -- the practical-version tradeoff for this control being genuinely
+    clickable rather than a static, non-functional strip.
     """
     indices, wl_quotes = _get_ticker_tape_data(tuple(watchlist_tickers))
 
-    chips = []
-    for idx in indices:
-        css = "tt-positive" if idx["change_pct"] >= 0 else "tt-negative"
-        arrow = "▲" if idx["change_pct"] >= 0 else "▼"
-        chips.append(
-            f'<span class="ticker-chip"><b>{idx["name"]}</b>{idx["level"]:,.2f} '
-            f'<span class="{css}">{arrow} {idx["change_pct"]:+.2f}%</span></span>'
-        )
-    for q in wl_quotes:
-        if q["change_pct"] is None:
-            continue
-        css = "tt-positive" if q["change_pct"] >= 0 else "tt-negative"
-        arrow = "▲" if q["change_pct"] >= 0 else "▼"
-        chips.append(
-            f'<span class="ticker-chip"><b>{q["symbol"]}</b>{CURRENCY}{q["price"]:,.2f} '
-            f'<span class="{css}">{arrow} {q["change_pct"]:+.2f}%</span></span>'
-        )
+    instruments = [
+        {"chart_symbol": idx["ticker"], "label": idx["name"], "price_str": f'{idx["level"]:,.2f}',
+         "change_pct": idx["change_pct"]}
+        for idx in indices
+    ] + [
+        {"chart_symbol": q["ticker"], "label": q["symbol"], "price_str": f'{CURRENCY}{q["price"]:,.2f}',
+         "change_pct": q["change_pct"]}
+        for q in wl_quotes if q["change_pct"] is not None
+    ]
 
-    if chips:
-        st.markdown(f'<div class="ticker-tape-wrap">{"".join(chips)}</div>', unsafe_allow_html=True)
-    else:
+    if not instruments:
         st.caption("Ticker data unavailable right now.")
+        return
 
-    tape_col, _ = st.columns([2, 6])
-    with tape_col:
-        tape_symbols = ["Nifty 50", "Bank Nifty", "Sensex"] + [q["symbol"] for q in wl_quotes]
-        picked = st.selectbox(
-            "Jump chart to instrument", tape_symbols, index=None,
-            placeholder="📈 Load instrument in chart...", label_visibility="collapsed", key="ticker_tape_jump",
-        )
-        resolved = _resolve_chart_symbol(picked) if picked else None
-        if resolved and resolved != st.session_state.chart_symbol:
-            st.session_state.chart_symbol = resolved
-            st.rerun()
+    st.caption("👆 Click an instrument to load its chart")
+    cols_per_row = 6
+    for row_start in range(0, len(instruments), cols_per_row):
+        row_items = instruments[row_start:row_start + cols_per_row]
+        cols = st.columns(len(row_items))
+        for col, inst in zip(cols, row_items):
+            arrow = "▲" if inst["change_pct"] >= 0 else "▼"
+            color = "green" if inst["change_pct"] >= 0 else "red"
+            btn_label = (
+                f'**{inst["label"]}**  \n{inst["price_str"]}  '
+                f':{color}[{arrow} {abs(inst["change_pct"]):.2f}%]'
+            )
+            is_active = inst["chart_symbol"] == st.session_state.chart_symbol
+            with col:
+                if st.button(
+                    btn_label, key=f"tape_btn_{inst['chart_symbol']}", width="stretch",
+                    type="primary" if is_active else "secondary",
+                ):
+                    st.session_state.chart_symbol = inst["chart_symbol"]
+                    st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -1176,12 +1167,24 @@ def render_chart_pane():
 
     tb1, tb2, tb3, tb4, tb5 = st.columns([2.4, 1.2, 1.0, 1.1, 1.1])
     with tb1:
+        # Deliberately NOT pre-filled from st.session_state.chart_symbol: a
+        # text_input's `value=` argument is only honored the first time a
+        # keyed widget is created -- on every later rerun Streamlit keeps
+        # whatever the box last held instead, so binding `value=` to
+        # chart_symbol here would silently re-diff against that stale text
+        # and stomp any programmatic change (e.g. a ticker-tape button
+        # click) right back to whatever this box last showed. This search
+        # box is intentionally a one-way "type something new to jump"
+        # control instead; the currently loaded symbol is shown in the
+        # price header below the toolbar, not echoed back into this field.
         symbol_input = st.text_input(
-            "Symbol", value=_chart_symbol_label(st.session_state.chart_symbol),
-            placeholder="Symbol (e.g. RELIANCE, NIFTY 50)...", label_visibility="collapsed", key="chart_symbol_input",
+            "Symbol", placeholder="🔍 Search symbol (e.g. RELIANCE, NIFTY 50)...",
+            label_visibility="collapsed", key="chart_symbol_search_input",
         )
-        if symbol_input.strip() and symbol_input.strip().upper() != _chart_symbol_label(st.session_state.chart_symbol).upper():
-            resolved = _resolve_chart_symbol(symbol_input)
+        typed = symbol_input.strip()
+        if typed and typed.upper() != st.session_state.get("_last_chart_symbol_search", ""):
+            st.session_state["_last_chart_symbol_search"] = typed.upper()
+            resolved = _resolve_chart_symbol(typed)
             if resolved != st.session_state.chart_symbol:
                 st.session_state.chart_symbol = resolved
                 st.rerun()
