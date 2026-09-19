@@ -15,8 +15,8 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 from src import (
-    config, deep_dive, detail, market_overview, pre_breakout, rising_channel, scan_history, scanner,
-    trend_consolidation, watchlist,
+    config, deep_dive, detail, indicators, market_overview, pre_breakout, rising_channel, scan_history,
+    scanner, trend_consolidation, watchlist,
 )
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
@@ -780,19 +780,33 @@ def render_detail_panel():
             if hist.empty or "Open" not in hist.columns:
                 st.caption("Price history unavailable for this ticker right now.")
             else:
-                fig = go.Figure(data=[go.Candlestick(
+                from plotly.subplots import make_subplots
+
+                rsi_series = indicators.compute_rsi(hist["Close"])
+                fig = make_subplots(
+                    rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.05,
+                    subplot_titles=(f"{ticker.replace('.NS', '')} — Price", "RSI(14)"),
+                )
+                fig.add_trace(go.Candlestick(
                     x=hist.index, open=hist["Open"], high=hist["High"], low=hist["Low"], close=hist["Close"],
                     increasing_line_color="#3ECF8E", decreasing_line_color="#FF6B6B", name=ticker,
-                )])
+                ), row=1, col=1)
                 if tech is not None and pd.notna(tech.get("Resistance Level")):
                     fig.add_hline(
                         y=tech["Resistance Level"], line_dash="dash", line_color="#FF6B6B",
                         annotation_text=f"Resistance: {CURRENCY}{tech['Resistance Level']:.2f}",
-                        annotation_position="top left", annotation_font_color="#FF6B6B",
+                        annotation_position="top left", annotation_font_color="#FF6B6B", row=1, col=1,
                     )
+                fig.add_trace(go.Scatter(
+                    x=rsi_series.index, y=rsi_series, mode="lines", name="RSI(14)",
+                    line=dict(color="#4FD1E8", width=1.5),
+                ), row=2, col=1)
+                fig.add_hline(y=65, line_dash="dot", line_color="#FF6B6B", row=2, col=1)
+                fig.add_hline(y=50, line_dash="dot", line_color="#3ECF8E", row=2, col=1)
                 fig.update_layout(
-                    template="plotly_dark", height=420, margin=dict(l=10, r=10, t=30, b=10),
+                    template="plotly_dark", height=520, margin=dict(l=10, r=10, t=30, b=10),
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False,
+                    showlegend=False,
                 )
                 st.plotly_chart(fig, width="stretch")
 
