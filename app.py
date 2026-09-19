@@ -528,50 +528,6 @@ def render_home_header():
         st.caption("⏳ This data may be stale — an auto-refresh is due. Use ▶️ Run Scan for the latest.")
 
 
-def render_home_top_controls():
-    with st.container(border=True):
-        pill_col, cta_col, run_col = st.columns([2, 1.4, 1.4])
-        with pill_col:
-            st.markdown(
-                f'<div class="condition-pill">🔽 Closing price &gt; {CURRENCY}{MIN_PRICE:.2f} · Nifty 500</div>',
-                unsafe_allow_html=True,
-            )
-        with cta_col:
-            if st.button("🎯 View Full Results", key="home_open_results", width="stretch", type="primary"):
-                st.session_state.nav_page = "Upside Buy Movement"
-                st.rerun()
-        with run_col:
-            if st.button("▶️ Run Scan", key="home_run_scan_top", width="stretch"):
-                st.session_state["_trigger_scan"] = True
-                st.rerun()
-        st.caption(
-            f"{result['universe_size']} instruments in the Nifty 500 selection — may differ slightly from "
-            f"a round number due to index reconstitution or data gaps. Scanned OK: {result['scanned']}."
-        )
-
-
-def render_home_summary_tiles():
-    tiles = [
-        ("🎯", "#4FD1E822", "#4FD1E8", len(result["near_resistance"]), "Near Resistance", "Upside Buy Movement"),
-        ("📦", "#B26BFF22", "#B26BFF", len(result["consolidating"]), "Consolidating", "Upside Buy Movement"),
-        ("🚀", "#FF6B6B22", "#FF6B6B", len(result["already_broken_out"]), "Already Broken Out", "Upside Buy Movement"),
-        ("✅", "#3ECF8E22", "#3ECF8E", result["scanned"], "Successfully Scanned", None),
-    ]
-    cols = st.columns(4)
-    for col, (icon, bg, color, value, label, nav_target) in zip(cols, tiles):
-        with col:
-            with st.container(border=True):
-                st.markdown(
-                    f'<div class="metric-icon" style="background:{bg}; color:{color};">{icon}</div>'
-                    f'<div class="metric-value">{value}</div><div class="metric-label">{label}</div>',
-                    unsafe_allow_html=True,
-                )
-                if nav_target:
-                    if st.button("View →", key=f"tile_{label}", width="stretch"):
-                        st.session_state.nav_page = nav_target
-                        st.rerun()
-
-
 def render_market_overview_card():
     with st.container(border=True):
         st.markdown(
@@ -1072,10 +1028,6 @@ def render_footer(scan_ts: float | None = None):
 
 if nav_page == "Home":
     render_home_header()
-    st.write("")
-    render_home_top_controls()
-    st.write("")
-    render_home_summary_tiles()
     st.write("")
 
     ov_col, wl_col = st.columns(2)
