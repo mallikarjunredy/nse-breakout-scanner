@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 
 from src import (
@@ -99,6 +100,31 @@ def _market_status() -> tuple[str, bool]:
     return "NSE", is_open
 
 
+# Friendly names shown in the ticker tape / chart-symbol search resolve to
+# these index tickers; anything else falls back to pre_breakout's NSE-stock
+# normalization (adds ".NS"). Keeps the chart pane's "jump to instrument"
+# working for indices, which aren't NSE-suffixed tickers.
+_CHART_INDEX_ALIASES = {
+    "NIFTY 50": "^NSEI", "NIFTY50": "^NSEI", "NIFTY": "^NSEI",
+    "BANK NIFTY": "^NSEBANK", "BANKNIFTY": "^NSEBANK", "NIFTY BANK": "^NSEBANK",
+    "SENSEX": "^BSESN", "BSE SENSEX": "^BSESN",
+}
+_CHART_INDEX_LABELS = {"^NSEI": "Nifty 50", "^NSEBANK": "Bank Nifty", "^BSESN": "Sensex"}
+
+
+def _resolve_chart_symbol(raw: str) -> str:
+    key = raw.strip().upper()
+    if key in _CHART_INDEX_ALIASES:
+        return _CHART_INDEX_ALIASES[key]
+    if key.startswith("^"):
+        return key
+    return pre_breakout.normalize_ticker(raw)
+
+
+def _chart_symbol_label(ticker: str) -> str:
+    return _CHART_INDEX_LABELS.get(ticker, ticker.replace(".NS", ""))
+
+
 # ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
@@ -115,6 +141,8 @@ if "tc_selected_ticker" not in st.session_state:
     st.session_state.tc_selected_ticker = None
 if "trend_consol_backtest_result" not in st.session_state:
     st.session_state.trend_consol_backtest_result = None
+if "chart_symbol" not in st.session_state:
+    st.session_state.chart_symbol = "^NSEI"  # Home's chart pane defaults to Nifty 50, daily
 if "rc_selected_ticker" not in st.session_state:
     st.session_state.rc_selected_ticker = None
 if "watchlist_cache" not in st.session_state:
@@ -198,6 +226,19 @@ st.markdown(
         background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
         color: #CFE3F5; font-size: 0.82rem; font-weight: 600; white-space: nowrap;
     }
+    .ticker-tape-wrap {
+        width: 100%; overflow-x: auto; white-space: nowrap; padding: 0.5rem 0.2rem;
+        margin-bottom: 0.6rem; border-top: 1px solid rgba(255,255,255,0.08);
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .ticker-chip {
+        display: inline-block; padding: 0.2rem 1rem; font-size: 0.82rem; color: #CFE3F5;
+        border-right: 1px solid rgba(255,255,255,0.08);
+    }
+    .ticker-chip:last-child { border-right: none; }
+    .ticker-chip b { color: #EAF2FA; margin-right: 0.35rem; }
+    .tt-positive { color: #3ECF8E; font-weight: 600; }
+    .tt-negative { color: #FF6B6B; font-weight: 600; }
     .nav-tagline {
         margin-top: 1rem; padding: 0.9rem; border-radius: 12px;
         background: linear-gradient(135deg, rgba(79,209,232,0.14), rgba(28,37,65,0.4));
@@ -278,6 +319,63 @@ exch_name, market_is_open = _market_status()
 watchlist_tickers = watchlist.load()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _get_ticker_tape_data(wl_tuple: tuple):
+    """Cached separately from the strategy scan cache -- the ticker tape
+    needs only a handful of quotes and refreshes on its own short TTL
+    rather than waiting on config.SCAN_CACHE_TTL_SECONDS.
+    """
+    indices = market_overview.get_indices_snapshot()
+    wl_quotes = market_overview.get_ticker_tape_quotes(list(wl_tuple))
+    return indices, wl_quotes
+
+
+def render_ticker_tape():
+    """Top market ticker strip: Nifty 50 / Bank Nifty / Sensex first, then
+    the user's own watchlist -- shown below the header on every page. The
+    strip itself is plain (non-clickable) HTML; a real selectbox next to it
+    is the actual "click an instrument to load its chart" control, since
+    HTML styled to look clickable without a real click handler is a known
+    bug class in this app (see CLAUDE.md).
+    """
+    indices, wl_quotes = _get_ticker_tape_data(tuple(watchlist_tickers))
+
+    chips = []
+    for idx in indices:
+        css = "tt-positive" if idx["change_pct"] >= 0 else "tt-negative"
+        arrow = "▲" if idx["change_pct"] >= 0 else "▼"
+        chips.append(
+            f'<span class="ticker-chip"><b>{idx["name"]}</b>{idx["level"]:,.2f} '
+            f'<span class="{css}">{arrow} {idx["change_pct"]:+.2f}%</span></span>'
+        )
+    for q in wl_quotes:
+        if q["change_pct"] is None:
+            continue
+        css = "tt-positive" if q["change_pct"] >= 0 else "tt-negative"
+        arrow = "▲" if q["change_pct"] >= 0 else "▼"
+        chips.append(
+            f'<span class="ticker-chip"><b>{q["symbol"]}</b>{CURRENCY}{q["price"]:,.2f} '
+            f'<span class="{css}">{arrow} {q["change_pct"]:+.2f}%</span></span>'
+        )
+
+    if chips:
+        st.markdown(f'<div class="ticker-tape-wrap">{"".join(chips)}</div>', unsafe_allow_html=True)
+    else:
+        st.caption("Ticker data unavailable right now.")
+
+    tape_col, _ = st.columns([2, 6])
+    with tape_col:
+        tape_symbols = ["Nifty 50", "Bank Nifty", "Sensex"] + [q["symbol"] for q in wl_quotes]
+        picked = st.selectbox(
+            "Jump chart to instrument", tape_symbols, index=None,
+            placeholder="📈 Load instrument in chart...", label_visibility="collapsed", key="ticker_tape_jump",
+        )
+        resolved = _resolve_chart_symbol(picked) if picked else None
+        if resolved and resolved != st.session_state.chart_symbol:
+            st.session_state.chart_symbol = resolved
+            st.rerun()
+
+
 # ---------------------------------------------------------------------------
 # Header bar
 # ---------------------------------------------------------------------------
@@ -287,8 +385,8 @@ status_color = "#3ECF8E" if market_is_open else "#FF6B6B"
 h_left, h_mid, h_right = st.columns([2.2, 3, 2.6])
 with h_left:
     st.markdown(
-        '<p class="app-logo-title">📊 NSE Scanner</p>'
-        '<p class="app-logo-sub">Upside Buy Movement</p>',
+        '<p class="app-logo-title">🕉️ Lifeline Trade</p>'
+        '<p class="app-logo-sub">NSE Market Terminal · Delayed Data</p>',
         unsafe_allow_html=True,
     )
 with h_mid:
@@ -328,6 +426,8 @@ with disclaimer_col:
             "not an official NSE real-time feed.\n\n"
             "**Market status** reflects trading hours only, not exchange holidays."
         )
+
+render_ticker_tape()
 
 if search_submitted and search_input.strip():
     with st.spinner(f"Looking up {search_input.strip()}..."):
@@ -780,8 +880,6 @@ def render_detail_panel():
             if hist.empty or "Open" not in hist.columns:
                 st.caption("Price history unavailable for this ticker right now.")
             else:
-                from plotly.subplots import make_subplots
-
                 rsi_series = indicators.compute_rsi(hist["Close"])
                 fig = make_subplots(
                     rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.05,
@@ -1024,6 +1122,157 @@ def render_detail_panel():
                 )
 
 
+_CHART_INTERVALS = ["5m", "1d", "1wk", "1mo", "1y"]
+
+
+def _build_chart_figure(df: pd.DataFrame, symbol_label: str, chart_type: str, show_rsi: bool) -> go.Figure:
+    """Light/white-themed candlestick (or line) chart with an optional
+    synced RSI(14) panel underneath -- deliberately a different palette
+    from the rest of the (dark) app, matching the terminal screenshot's
+    clean white chart background. No EMA/volume/buy-sell overlays here by
+    design (see CLAUDE.md's chart-pane spec) -- those belong to the
+    strategy detail-panel chart, not this general-purpose instrument chart.
+    """
+    if show_rsi:
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.04)
+    else:
+        fig = make_subplots(rows=1, cols=1)
+
+    if chart_type == "Line":
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df["Close"], mode="lines", name=symbol_label, line=dict(color="#1E88E5", width=1.6),
+        ), row=1, col=1)
+    else:
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+            increasing_line_color="#26A69A", decreasing_line_color="#EF5350",
+            increasing_fillcolor="#26A69A", decreasing_fillcolor="#EF5350", name=symbol_label,
+        ), row=1, col=1)
+
+    if show_rsi:
+        rsi_series = indicators.compute_rsi(df["Close"])
+        fig.add_hrect(y0=30, y1=70, fillcolor="#8E24AA", opacity=0.07, line_width=0, row=2, col=1)
+        fig.add_trace(go.Scatter(
+            x=rsi_series.index, y=rsi_series, mode="lines", name="RSI(14)", line=dict(color="#8E24AA", width=1.4),
+        ), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="#B0B0B0", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="#B0B0B0", row=2, col=1)
+        fig.update_yaxes(title_text="RSI(14)", range=[0, 100], row=2, col=1)
+
+    fig.update_layout(
+        template="plotly_white", height=560 if show_rsi else 460,
+        margin=dict(l=10, r=55, t=10, b=10), paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+        xaxis_rangeslider_visible=False, showlegend=False, font=dict(color="#1A1A1A"),
+        dragmode="pan",
+    )
+    fig.update_xaxes(gridcolor="#EDEDED", showgrid=True)
+    fig.update_yaxes(gridcolor="#EDEDED", showgrid=True, side="right", row=1, col=1)
+    return fig
+
+
+@st.dialog("Full Screen Chart", width="large")
+def _fullscreen_chart_dialog(fig: go.Figure):
+    fig_full = go.Figure(fig)
+    fig_full.update_layout(height=760)
+    st.plotly_chart(fig_full, width="stretch", config={"displayModeBar": True}, key="chart_fullscreen_plot")
+    if st.button("Close", key="chart_fullscreen_close", type="primary"):
+        st.rerun()
+
+
+def render_chart_pane():
+    """Right-hand chart pane: right-aligned toolbar (Symbol -> Timeframe ->
+    Chart type -> Indicators -> Full Screen), an OHLC/change header line,
+    then the candlestick+RSI figure. Drawing tools (trend line, rectangle,
+    freehand, erase) come from Plotly's own built-in modebar -- this app's
+    "practical version" scope deliberately excludes Fibonacci/parallel-
+    channel/lock-hide/undo-redo/per-instrument-persisted drawings and a
+    true drag-to-resize divider (a slider stands in for that on Home).
+    """
+    st.markdown(
+        '<div class="card-header"><span class="badge-dot" style="background:#1E88E5;"></span>'
+        "📈 Chart</div>", unsafe_allow_html=True,
+    )
+
+    tb1, tb2, tb3, tb4, tb5 = st.columns([2.4, 1.2, 1.0, 1.1, 1.1])
+    with tb1:
+        symbol_input = st.text_input(
+            "Symbol", value=_chart_symbol_label(st.session_state.chart_symbol),
+            placeholder="Symbol (e.g. RELIANCE, NIFTY 50)...", label_visibility="collapsed", key="chart_symbol_input",
+        )
+        if symbol_input.strip() and symbol_input.strip().upper() != _chart_symbol_label(st.session_state.chart_symbol).upper():
+            resolved = _resolve_chart_symbol(symbol_input)
+            if resolved != st.session_state.chart_symbol:
+                st.session_state.chart_symbol = resolved
+                st.rerun()
+    with tb2:
+        interval = st.selectbox(
+            "Timeframe", _CHART_INTERVALS, index=1, label_visibility="collapsed",
+            format_func=lambda i: detail.INTERVAL_LABELS[i], key="chart_interval",
+        )
+    with tb3:
+        range_options = detail.RANGE_OPTIONS_BY_INTERVAL[interval]
+        default_range = "1Y" if "1Y" in range_options else range_options[-1]
+        range_key = st.selectbox(
+            "Range", range_options, index=range_options.index(default_range),
+            label_visibility="collapsed", key=f"chart_range_{interval}",
+        )
+    with tb4:
+        chart_type = st.selectbox(
+            "Chart type", ["Candlestick", "Line"], label_visibility="collapsed", key="chart_type",
+        )
+    with tb5:
+        with st.popover("📊 Indicators", width="stretch"):
+            show_rsi = st.checkbox("RSI (14)", value=True, key="chart_show_rsi")
+            st.caption("Only RSI(14) is available on this chart -- no EMA/volume overlays by design.")
+
+    df, note = detail.get_chart_data(st.session_state.chart_symbol, interval, range_key)
+    symbol_label = _chart_symbol_label(st.session_state.chart_symbol)
+
+    if df.empty:
+        st.warning(note or "No price data available for this instrument/interval/range.")
+        return
+
+    last = df.iloc[-1]
+    prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else None
+    chg = (float(last["Close"]) - prev_close) if prev_close else None
+    chg_pct = (chg / prev_close * 100) if prev_close else None
+    if chg is not None:
+        chg_class = "stock-change-pos" if chg >= 0 else "stock-change-neg"
+        chg_html = f'<span class="{chg_class}">{chg:+.2f} ({chg_pct:+.2f}%)</span>'
+    else:
+        chg_html = '<span class="meta-text">N/A</span>'
+    st.markdown(
+        f'<div style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap;">'
+        f'<span style="font-size:1.05rem; font-weight:700; color:#EAF2FA;">{symbol_label}</span>'
+        f'<span class="stock-price-big" style="font-size:1.25rem;">{CURRENCY}{float(last["Close"]):,.2f}</span>'
+        f"{chg_html}"
+        f'<span class="meta-text">O {float(last["Open"]):.2f} · H {float(last["High"]):.2f} · '
+        f'L {float(last["Low"]):.2f} · {detail.INTERVAL_LABELS[interval]}</span>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    if note:
+        st.caption(f"ℹ️ {note}")
+
+    fig = _build_chart_figure(df, symbol_label, chart_type, show_rsi)
+    st.plotly_chart(
+        fig, width="stretch",
+        config={
+            "displayModeBar": True, "scrollZoom": True,
+            "modeBarButtonsToAdd": ["drawline", "drawrect", "drawopenpath", "eraseshape"],
+            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+        },
+        key=f"chart_plot_{st.session_state.chart_symbol}_{interval}_{range_key}_{chart_type}_{show_rsi}",
+    )
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        f"Prices as of {df.index[-1].strftime('%d %b %Y')}"
+        f'{" " + df.index[-1].strftime("%I:%M %p") + " IST" if interval == "5m" else ""}.'
+    )
+    if st.button("⛶ Full Screen", key="chart_fullscreen_btn", width="stretch"):
+        _fullscreen_chart_dialog(fig)
+
+
 def render_footer(scan_ts: float | None = None):
     scan_label_full = datetime.datetime.fromtimestamp(scan_ts or scan_time, tz=IST).strftime("%Y-%m-%d %H:%M:%S IST")
     st.markdown(
@@ -1044,27 +1293,35 @@ if nav_page == "Home":
     render_home_header()
     st.write("")
 
-    ov_col, wl_col = st.columns(2)
-    with ov_col:
-        render_market_overview_card()
-    with wl_col:
-        render_watchlist_overview_card()
-
-    st.write("")
-    render_fifty_two_week_card()
-
-    # Default to the #1 candidate so the analysis section below is never
-    # empty -- the user can still pick any other row via the tables above.
+    # Default to the #1 candidate so the analysis section below (and the
+    # detail panel) is never empty -- the user can still pick any other row.
     if not st.session_state.selected_ticker:
         if not result["near_resistance"].empty:
             st.session_state.selected_ticker = result["near_resistance"].iloc[0]["Ticker"]
         elif not result["consolidating"].empty:
             st.session_state.selected_ticker = result["consolidating"].iloc[0]["Ticker"]
 
-    st.write("")
-    render_latest_opportunities_card()
-    st.write("")
-    render_recent_scan_history_card()
+    # Terminal-style layout: dashboard on the left, live candlestick+RSI
+    # chart on the right. True pixel drag-to-resize isn't available in
+    # pure Streamlit, so this slider is the practical substitute -- moving
+    # it re-splits the two st.columns on the next rerun. On narrow screens
+    # Streamlit stacks columns automatically, so nothing is hidden there.
+    split_pct = st.slider(
+        "↔️ Dashboard / Chart width", min_value=30, max_value=70, value=50, step=5,
+        key="home_split_pct", help="Resize the dashboard vs. chart panels below.",
+    )
+    dash_col, chart_col = st.columns([split_pct, 100 - split_pct])
+
+    with dash_col:
+        render_market_overview_card()
+        render_watchlist_overview_card()
+        render_fifty_two_week_card()
+        render_latest_opportunities_card()
+        render_recent_scan_history_card()
+
+    with chart_col:
+        with st.container(border=True):
+            render_chart_pane()
 
     st.divider()
     st.markdown("### 🔎 Selected Stock Analysis")

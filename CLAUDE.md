@@ -490,7 +490,38 @@ hypothesis, not a proven profitable strategy" and never reports a
 "success rate" framed as a probability of profit -- the live scan's
 "Why Qualified" explains which rules matched, nothing more.
 
-## Home page layout
+## Branding and header
+
+The app is branded "🕉️ Lifeline Trade" (top-left header, `.app-logo-title`)
+with subtitle "NSE Market Terminal · Delayed Data" -- replacing the old
+"📊 NSE Scanner" title. The Om symbol (🕉️) is a deliberate placeholder for
+a requested "small, respectful Lord Ganesh icon": no image-generation or
+asset-sourcing tool was available, and sourcing a random web image for
+religious iconography without the user's explicit sign-off wasn't
+appropriate. Swap it for a real supplied icon file if/when the user
+provides one.
+
+## Top ticker tape
+
+`render_ticker_tape()` (in `app.py`, defined right after `watchlist_tickers
+= watchlist.load()` since it's called immediately below the header --
+before the page-routing functions further down the file are even defined)
+renders a horizontally-scrollable strip (`.ticker-tape-wrap`/`.ticker-chip`
+CSS) below the header **on every page**: Nifty 50, Bank Nifty, Sensex
+first (`market_overview.get_indices_snapshot()`), then the user's own
+watchlist tickers (`market_overview.get_ticker_tape_quotes()`), green/red
+per instrument via `.tt-positive`/`.tt-negative`. Both queries are wrapped
+in `_get_ticker_tape_data()`, a `@st.cache_data(ttl=300)` function keyed on
+`tuple(watchlist_tickers)` -- a short TTL independent of
+`config.SCAN_CACHE_TTL_SECONDS`, since the tape doesn't need to wait on a
+full universe scan to refresh. The strip itself is plain, non-clickable
+HTML (see the "fake-clickable HTML" bug class above); a separate
+`st.selectbox` ("Jump chart to instrument", key `ticker_tape_jump`) right
+below it is the actual click-to-load-chart control -- picking a name
+resolves it via `_resolve_chart_symbol()` and sets
+`st.session_state.chart_symbol`, then reruns.
+
+## Home page layout: terminal-style split
 
 Top to bottom:
 
@@ -500,39 +531,86 @@ Top to bottom:
    date **separately**, both in IST. If the universe's last daily
    candle's date equals today's IST date *and* the market is currently
    open, an inline warning notes that candle may still be forming.
-2. A 2-column row: `render_market_overview_card()` (Nifty 50 / Bank
-   Nifty / Sensex via `market_overview.get_indices_snapshot()`) and
-   `render_watchlist_overview_card()` (latest price/status for every
-   watchlisted ticker).
-3. `render_fifty_two_week_card()` -- two tabs, "New 52W High" / "New 52W
-   Low": Nifty 500 stocks whose latest session's High/Low actually
-   reached a new trailing-252-session extreme (not just "trading near"
-   one). Computed by `src/fifty_two_week.py`'s
-   `compute_fifty_two_week_lists()`, called from inside
-   `pre_breakout.scan_pre_breakout()` right after it downloads
-   `history` -- reusing that same already-downloaded universe OHLCV
-   rather than fetching the whole universe a second time for an
-   otherwise-unrelated Home widget. A ticker with fewer than 252
-   sessions of history is skipped entirely (no way to know its genuine
-   52-week extreme from a shorter window), rather than mislabeling a
-   shorter-window max/min as "52-week."
-4. `render_latest_opportunities_card()` -- top 10 Near-Resistance +
-   Consolidating candidates by closeness to resistance, followed by an
-   "📰 Indian Market News" caption (Yahoo Finance news for `^NSEI`, via
-   `deep_dive.get_recent_news`).
-5. `render_recent_scan_history_card()` -- last 5 `scan_history` entries
-   (Scan Time/Universe/Status/Matches; Status is always "✅ Completed"
-   since `record()` only ever logs a scan that finished).
+2. A resizable two-column split (`st.slider("↔️ Dashboard / Chart width",
+   key="home_split_pct")` driving `st.columns([split_pct, 100 -
+   split_pct])`, default 50/50, 30-70 range in steps of 5) -- the
+   practical substitute for a true pixel drag-to-resize divider, which
+   pure Streamlit can't do without a custom JS component. Narrower
+   screens stack the two columns automatically (Streamlit's own
+   responsive behavior), so nothing is hidden there.
+   - **Left column**: the existing dashboard cards, stacked vertically --
+     `render_market_overview_card()`, `render_watchlist_overview_card()`,
+     `render_fifty_two_week_card()` (New 52W High/New 52W Low tabs, from
+     `src/fifty_two_week.py`, computed inside `pre_breakout.scan_pre_breakout()`
+     off the already-downloaded universe history), `render_latest_opportunities_card()`
+     (top 10 Near-Resistance + Consolidating candidates plus "📰 Indian
+     Market News"), `render_recent_scan_history_card()` (last 5 scan_history
+     entries).
+   - **Right column**: `render_chart_pane()` inside its own
+     `st.container(border=True)` -- a live candlestick/line chart with a
+     synced RSI(14) panel. Defaults to `^NSEI` (Nifty 50), daily interval.
+3. The usual divider + "🔎 Selected Stock Analysis" + `render_detail_panel()`
+   (unchanged, full-width, below the split -- selecting a row from any
+   dashboard card still populates this the same way it always has).
 
-Home no longer shows the mandatory-price-floor pill, the "View Full
-Results"/"Run Scan" shortcut row, or the four Near Resistance/
-Consolidating/Already Broken Out/Scanned summary tiles (`render_home_top_controls()`
-and `render_home_summary_tiles()`) -- removed at the user's request.
-Those actions are still reachable via the sidebar nav (Upside Buy
-Movement page has its own "▶️ Run Scan") and the Latest Opportunities
-card's "View all results" button; nothing else depended on the removed
-functions, so they were deleted rather than left dead.
-6. The usual divider + "🔎 Selected Stock Analysis" + `render_detail_panel()`.
+Home still doesn't show the mandatory-price-floor pill, the "View Full
+Results"/"Run Scan" shortcut row, or the four summary tiles -- that
+removal (see prior entry, `render_home_top_controls()`/
+`render_home_summary_tiles()`) stands; nothing in this redesign brought
+them back.
+
+### Chart pane (`render_chart_pane()`, `_build_chart_figure()`, `_fullscreen_chart_dialog()`)
+
+A right-aligned toolbar, left-to-right: **Symbol search** (free-text,
+resolved via `_resolve_chart_symbol()` -- index name aliases like "NIFTY
+50"/"BANK NIFTY"/"SENSEX" map to `^NSEI`/`^NSEBANK`/`^BSESN`, anything
+else falls back to `pre_breakout.normalize_ticker()`, i.e. NSE stocks) →
+**Timeframe** (`chart_interval`: 5 Minute / Daily / Weekly / Monthly /
+Yearly, via `detail.INTERVAL_LABELS`) → **Range** (`chart_range_<interval>`,
+options vary per interval via `detail.RANGE_OPTIONS_BY_INTERVAL` -- e.g.
+5-Minute only offers 5D/1M since Yahoo doesn't keep intraday bars longer
+than that) → **Chart type** (Candlestick / Line) → **Indicators** popover
+(a single "RSI (14)" checkbox, default **on**; no EMA/volume/other
+overlay options exist here by design) → **⛶ Full Screen** button, which
+opens `_fullscreen_chart_dialog()` (`@st.dialog("Full Screen Chart",
+width="large")`, a taller copy of the same figure).
+
+`detail.get_chart_data(ticker, interval, range_key)` is the data source:
+5-Minute/Daily hit yfinance's native intervals directly; Weekly/Monthly/
+Yearly are **locally resampled from daily EOD data**
+(`_RESAMPLE_RULE = {"1wk": "W-FRI", "1mo": "ME", "1y": "YE"}`) since Yahoo
+has no native interval that reaches back far enough for those (or, for
+yearly, at all) -- real aggregated data, not fabricated, but disclosed via
+a `note` string shown as a caption under the chart whenever it applies.
+An empty result (bad symbol, no data for that interval/range) shows
+`st.warning(note)` and returns -- never a fabricated candle.
+
+`_build_chart_figure()` builds a **light/white-themed** `plotly_white`
+figure (`#FFFFFF` background, `#EDEDED` grid) -- deliberately different
+from the rest of the app's dark theme, matching the terminal screenshot's
+clean chart look. Candlesticks are green `#26A69A`/red `#EF5350`; when
+RSI is on, a `make_subplots(rows=2, row_heights=[0.75, 0.25])` puts a
+purple (`#8E24AA`) RSI(14) line in the bottom 25%, with a shaded
+`add_hrect(y0=30, y1=70)` band and dotted 30/70 reference lines, x-axes
+shared so pan/zoom/crosshair stay in sync between the two rows. No EMA
+lines, moving averages, volume bars, or buy/sell/order overlays are drawn
+here -- those belong to the strategy detail-panel chart
+(`render_detail_panel()`'s own `tab_chart`, unchanged), not this
+general-purpose instrument chart.
+
+Drawing tools come from Plotly's own modebar (`config=
+{"modeBarButtonsToAdd": ["drawline", "drawrect", "drawopenpath",
+"eraseshape"], "scrollZoom": True}`) -- trend line, rectangle, freehand,
+and erase, plus Plotly's native pan/zoom/crosshair-on-hover. This is the
+"practical version" scope the user explicitly signed off on in place of
+the full spec: it does **not** include Fibonacci retracement, parallel
+channel, a text tool, measurement tools, lock/hide toggles, undo/redo, a
+separate right-edge toolbar (Plotly's modebar stays in its own default
+position, not repositioned to the page's right edge), or per-instrument
+persisted drawings (drawings reset when the figure rebuilds on any
+control change, since nothing saves them) -- none of those are buildable
+in pure Streamlit+Plotly without embedding a custom JS component, and the
+user chose to ship everything else now rather than block on that.
 
 ## Export
 
