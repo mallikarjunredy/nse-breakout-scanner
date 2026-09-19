@@ -521,6 +521,78 @@ below it is the actual click-to-load-chart control -- picking a name
 resolves it via `_resolve_chart_symbol()` and sets
 `st.session_state.chart_symbol`, then reruns.
 
+## Fifth strategy: "Bullish Recovery Above EMAs"
+
+`src/bullish_recovery.py`, page "🌅 Bullish Recovery Above EMAs" -- a
+fixed-rule daily scanner, same philosophy as Upside Buy Movement:
+every threshold is a constant in `config.py`'s `BULLISH_RECOVERY_*`
+block, nothing here is user-adjustable, and it's NOT described as a
+"bullish engulfing" pattern (rule 4 only requires today's close ≥
+yesterday's *open*, not today's open below yesterday's close, so
+calling it "engulfing" would overclaim what the rules actually check).
+
+**Every condition must pass together**, evaluated against completed
+daily candles only ("previous day" = previous trading session, not a
+calendar day):
+
+1. Latest close ≥ EMA(10) of closes.
+2. Latest close ≥ EMA(20) of closes.
+3. Previous day's close ≤ previous day's open (a down or flat prior
+   session).
+4. Latest close ≥ previous day's open.
+5. Market cap ≥ `BULLISH_RECOVERY_MIN_MARKET_CAP_CR` (₹2,000 crore).
+6. RSI(14) (Wilder's, `indicators.compute_rsi`) ≥
+   `BULLISH_RECOVERY_RSI_MIN` (65).
+7. Latest close > the effective price floor -- this strategy's own
+   `BULLISH_RECOVERY_MIN_PRICE_INR` (₹25), but `config.MIN_PRICE_INR`
+   (₹100) always takes precedence when higher (`min_price = max(...)`
+   in `scan_bullish_recovery`) -- effectively ₹100 today, since that
+   global floor isn't optional anywhere else in this app either.
+
+**Cost-ordered evaluation, not a relaxed rule set**: conditions 1-4, 6,
+7 come straight from the already-bulk-downloaded OHLCV
+(`scanner.download_history`), so they're checked first and cheaply
+across the whole universe. Market cap (condition 5) needs a per-ticker
+`.info` lookup, which -- same discipline as everywhere else in this app
+-- never runs across a whole universe; `scanner.fetch_candidate_info()`
+(now also returning raw `market_cap` in rupees alongside `pe`/`name`/
+`sector`, converted to crore by dividing by `1_00_00_000` in
+`bullish_recovery.py`, never confused with a plain "divide by crore in
+INR" off-by-100 error) is only called for the small set of tickers that
+already passed every other condition. A ticker with too little price
+history for a real EMA20/RSI14 yet is a genuine "missing data" skip
+(`skipped_no_data`); a ticker that passes conditions 1-4/6/7 but has no
+reported market cap is a separate skip (`skipped_missing_market_cap`) --
+both counts are surfaced in the page's scan caption, never silently
+dropped.
+
+**Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks"
+(reusing `universe.get_nifty_500()`/`get_nse_all()`, the same loaders
+Upside Buy Movement uses) -- its own cache,
+`st.session_state.bullish_recovery_cache`, is a dict keyed by
+`universe_name` (`(timestamp, result)` per universe, auto-rescanned on
+first visit to a universe or TTL expiry, same pattern as
+`pre_breakout_cache`/`pre_breakout_all_cache`), not logged to
+`scan_history` (that log's schema belongs to Upside Buy Movement).
+
+**Results table**: Symbol, Company Name, Latest Close, Change %, EMA10,
+EMA20, Previous Open, Previous Close, RSI, Market Cap (₹ Cr), Candle
+Date -- sortable via `st.dataframe`'s own column-header sort, exportable
+via the shared `_export_buttons` popover. Selecting a row sets
+`st.session_state.br_selected_ticker` -- a page-local selection (like
+Rising Channel's `rc_selected_ticker`), not the shared
+`selected_ticker`/`render_detail_panel()`, since this strategy's own
+condition checklist has nothing in common with the other strategies'
+"Why Qualified" reasoning. Clicking a row loads a dedicated dark-themed
+candlestick chart (EMA10/EMA20 as dotted reference lines) with a synced
+RSI(14) panel underneath (same `make_subplots` 75/25 layout as the
+shared detail panel's chart tab), plus a condition checklist listing
+every one of the 7 rules with its actual computed value and a ✅/❌
+pass/fail marker (all ✅ for anything appearing in the results table,
+since only full matches are ever selectable here -- the checklist's
+job is transparency into the numbers behind the match, not surfacing
+near-misses).
+
 ## Home page layout: terminal-style split
 
 Top to bottom:

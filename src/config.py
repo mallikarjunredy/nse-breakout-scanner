@@ -112,6 +112,14 @@ TREND_CONSOL_VOLUME_MULTIPLIER = 1.5
 TREND_CONSOL_ATR_PERIOD = 14
 TREND_CONSOL_BENCHMARK_INDEX = "^NSEI"  # Nifty 50
 
+# "Bullish Recovery Above EMAs" -- see src/bullish_recovery.py. A fixed-
+# rule strategy like Upside Buy Movement: nothing here is user-adjustable.
+BULLISH_RECOVERY_EMA_FAST = 10
+BULLISH_RECOVERY_EMA_SLOW = 20
+BULLISH_RECOVERY_RSI_MIN = 65.0
+BULLISH_RECOVERY_MIN_PRICE_INR = 25.0  # this strategy's own floor -- MIN_PRICE_INR (₹100) takes precedence when higher
+BULLISH_RECOVERY_MIN_MARKET_CAP_CR = 2000.0
+
 # Paper-trading / backtest defaults for the same strategy.
 TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital
 TREND_CONSOL_BACKTEST_RISK_PCT = 0.5  # % of current equity risked per trade

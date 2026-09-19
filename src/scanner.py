@@ -53,8 +53,9 @@ def download_history(tickers: list[str], auto_adjust: bool = False) -> dict:
 
 
 def fetch_candidate_info(tickers: list[str]) -> dict:
-    """For a (small) list of stocks, fetches P/E ratio, company name, and
-    sector in parallel. This is the one place that calls yfinance's slow
+    """For a (small) list of stocks, fetches P/E ratio, company name,
+    sector, and raw market cap (in rupees, not crore -- callers convert)
+    in parallel. This is the one place that calls yfinance's slow
     per-ticker `.info` -- never run it across a whole universe.
     """
     info_by_ticker = {}
@@ -66,9 +67,10 @@ def fetch_candidate_info(tickers: list[str]) -> dict:
                 "pe": info.get("trailingPE") or info.get("forwardPE"),
                 "name": info.get("longName") or info.get("shortName"),
                 "sector": info.get("sector"),
+                "market_cap": info.get("marketCap"),
             }
         except Exception:
-            return t, {"pe": None, "name": None, "sector": None}
+            return t, {"pe": None, "name": None, "sector": None, "market_cap": None}
 
     with ThreadPoolExecutor(max_workers=config.PE_FETCH_WORKERS) as pool:
         futures = [pool.submit(fetch_one, t) for t in tickers]

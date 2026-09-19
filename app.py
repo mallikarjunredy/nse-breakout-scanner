@@ -16,8 +16,8 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 
 from src import (
-    config, deep_dive, detail, indicators, market_overview, pre_breakout, rising_channel, scan_history,
-    scanner, trend_consolidation, watchlist,
+    bullish_recovery, config, deep_dive, detail, indicators, market_overview, pre_breakout, rising_channel,
+    scan_history, scanner, trend_consolidation, watchlist,
 )
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
@@ -145,6 +145,10 @@ if "chart_symbol" not in st.session_state:
     st.session_state.chart_symbol = "^NSEI"  # Home's chart pane defaults to Nifty 50, daily
 if "rc_selected_ticker" not in st.session_state:
     st.session_state.rc_selected_ticker = None
+if "bullish_recovery_cache" not in st.session_state:
+    st.session_state.bullish_recovery_cache = {}  # keyed by universe_name -- (timestamp, result)
+if "br_selected_ticker" not in st.session_state:
+    st.session_state.br_selected_ticker = None
 if "watchlist_cache" not in st.session_state:
     st.session_state.watchlist_cache = {}
 if "selected_ticker" not in st.session_state:
@@ -272,8 +276,8 @@ st.markdown(
 _NAV_ITEMS = [
     ("Home", "🏠"), ("Upside Buy Movement", "🎯"), ("Upside Buy Movement above 100", "💹"),
     ("Daily Rising Channel", "📐"), ("Daily Trend + Consolidation", "🧭"),
-    ("Trend + Consolidation Backtest", "🧪"), ("Watchlist", "⭐"), ("Stock Analysis", "📈"),
-    ("Scan History", "🕐"), ("Help & Support", "❓"),
+    ("Trend + Consolidation Backtest", "🧪"), ("Bullish Recovery Above EMAs", "🌅"),
+    ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
 ]
 
 with st.sidebar:
@@ -2140,6 +2144,184 @@ elif nav_page == "Trend + Consolidation Backtest":
 
     st.divider()
     render_footer()
+
+
+# ---------------------------------------------------------------------------
+# Page: Bullish Recovery Above EMAs
+# ---------------------------------------------------------------------------
+
+_BR_COLUMN_ORDER = [
+    "Rank", "Ticker", "Company Name", "Latest Close", "Change %", "EMA10", "EMA20",
+    "Previous Open", "Previous Close", "RSI", "Market Cap (Cr)", "Candle Date",
+]
+_BR_COLUMN_CONFIG = {
+    "Rank": st.column_config.NumberColumn("Rank", width="small"),
+    "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+    "Company Name": st.column_config.TextColumn("Company Name"),
+    "Latest Close": st.column_config.NumberColumn("Close", format="₹%.2f"),
+    "Change %": st.column_config.NumberColumn("Chg %", format="%+.2f%%"),
+    "EMA10": st.column_config.NumberColumn("EMA10", format="₹%.2f"),
+    "EMA20": st.column_config.NumberColumn("EMA20", format="₹%.2f"),
+    "Previous Open": st.column_config.NumberColumn("Prev Open", format="₹%.2f"),
+    "Previous Close": st.column_config.NumberColumn("Prev Close", format="₹%.2f"),
+    "RSI": st.column_config.NumberColumn("RSI14", format="%.1f"),
+    "Market Cap (Cr)": st.column_config.NumberColumn("Mkt Cap (₹ Cr)", format="%.0f"),
+    "Candle Date": st.column_config.TextColumn("Candle Date", width="small"),
+}
+
+
+if nav_page == "Bullish Recovery Above EMAs":
+    st.markdown("### 🌅 Bullish Recovery Above EMAs")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "Every completed daily candle where the close has recovered back above both EMA(10) and EMA(20) "
+        "after a down/flat previous session, on strong (RSI ≥ 65) momentum, with a market cap of at least "
+        "₹2,000 crore -- a fixed rule set, not a prediction. This is NOT a confirmed bullish engulfing "
+        "pattern: today's open is not required to sit below yesterday's close."
+    )
+
+    br_universe_choice = st.radio(
+        "Universe", ["Nifty 500", "All Stocks"], horizontal=True, key="br_universe_choice",
+    )
+    br_universe_name = "nifty500" if br_universe_choice == "Nifty 500" else "all_nse"
+
+    br_cache_entry = st.session_state.bullish_recovery_cache.get(br_universe_name)
+    br_cache_fresh = (
+        br_cache_entry is not None and (time.time() - br_cache_entry[0]) < config.SCAN_CACHE_TTL_SECONDS
+    )
+    br_run_clicked = st.button("▶️ Run Bullish Recovery Scan", type="primary", key="run_bullish_recovery")
+
+    if br_run_clicked or not br_cache_fresh:
+        br_progress = st.progress(0, text="Starting scan...")
+
+        def _on_br_progress(frac, text_):
+            br_progress.progress(min(frac, 1.0), text=text_)
+
+        try:
+            with st.spinner(f"Scanning {br_universe_choice} for Bullish Recovery Above EMAs setups..."):
+                br_result = bullish_recovery.scan_bullish_recovery(
+                    progress_callback=_on_br_progress, universe_name=br_universe_name,
+                )
+            br_progress.empty()
+            st.session_state.bullish_recovery_cache[br_universe_name] = (time.time(), br_result)
+        except Exception as exc:
+            br_progress.empty()
+            st.error(f"Scan failed: {exc}. This is usually a temporary Yahoo Finance or network issue -- try again.")
+            br_result = None
+    else:
+        br_result = br_cache_entry[1]
+
+    if br_result is None:
+        st.stop()
+
+    br_scan_time = st.session_state.bullish_recovery_cache[br_universe_name][0]
+    br_scan_label = datetime.datetime.fromtimestamp(br_scan_time, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
+    br_asof = br_result.get("data_asof_date")
+    br_asof_label = br_asof.strftime("%d %b %Y") if br_asof else "N/A"
+    st.caption(
+        f"Last scanned: {br_scan_label} · Prices as of {br_asof_label} close · "
+        f"Universe: {br_universe_choice} ({br_result['universe_size']} instruments) · "
+        f"Scanned OK: {br_result['scanned']} · Skipped (missing data): {br_result['skipped_no_data']} · "
+        f"Skipped (missing market cap): {br_result['skipped_missing_market_cap']} · "
+        f"Price floor applied: {CURRENCY}{br_result['min_price']:.0f}"
+    )
+    if br_result["scanned"] == 0:
+        st.error(
+            "This scan couldn't retrieve any price data for this universe -- likely a temporary Yahoo "
+            "Finance or network issue. Try ▶️ Run Bullish Recovery Scan again shortly."
+        )
+
+    br_matches = br_result["matches"]
+    st.markdown(f"#### Matches ({len(br_matches)})")
+    if br_matches.empty:
+        st.info("No stocks matched the Bullish Recovery Above EMAs rules in this scan.")
+    else:
+        _export_buttons(br_matches, "bullish_recovery", "br_matches")
+        br_event = st.dataframe(
+            br_matches, hide_index=True, width="stretch", column_config=_BR_COLUMN_CONFIG,
+            column_order=[c for c in _BR_COLUMN_ORDER if c in br_matches.columns],
+            on_select="rerun", selection_mode="single-row", key="br_matches_table",
+        )
+        br_rows = br_event["selection"]["rows"]
+        if br_rows:
+            st.session_state.br_selected_ticker = br_matches.iloc[br_rows[0]]["Ticker"]
+
+    st.divider()
+    st.markdown("#### 📊 Selected Candidate: Chart + Condition Checklist")
+    br_ticker = st.session_state.br_selected_ticker
+    if not br_ticker or br_matches.empty or br_ticker not in set(br_matches["Ticker"]):
+        st.caption("👆 Click a row in the table above to see its chart and condition checklist here.")
+    else:
+        br_row = br_matches[br_matches["Ticker"] == br_ticker].iloc[0]
+        br_chart_col, br_checklist_col = st.columns([1.6, 1])
+        with br_chart_col:
+            with st.spinner(f"Loading chart for {br_ticker}..."):
+                br_hist = detail.get_price_history(br_ticker, period="1y")
+            if br_hist.empty:
+                st.caption("Price history unavailable for this ticker right now.")
+            else:
+                br_rsi_series = indicators.compute_rsi(br_hist["Close"])
+                br_fig = make_subplots(
+                    rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.05,
+                    subplot_titles=(f"{br_ticker.replace('.NS', '')} — Price", "RSI(14)"),
+                )
+                br_fig.add_trace(go.Candlestick(
+                    x=br_hist.index, open=br_hist["Open"], high=br_hist["High"], low=br_hist["Low"],
+                    close=br_hist["Close"], increasing_line_color="#3ECF8E", decreasing_line_color="#FF6B6B",
+                    name=br_ticker,
+                ), row=1, col=1)
+                br_fig.add_hline(
+                    y=float(br_row["EMA10"]), line_dash="dot", line_color="#4FD1E8",
+                    annotation_text="EMA10", annotation_position="top left",
+                    annotation_font_color="#4FD1E8", row=1, col=1,
+                )
+                br_fig.add_hline(
+                    y=float(br_row["EMA20"]), line_dash="dot", line_color="#B26BFF",
+                    annotation_text="EMA20", annotation_position="top left",
+                    annotation_font_color="#B26BFF", row=1, col=1,
+                )
+                br_fig.add_trace(go.Scatter(
+                    x=br_rsi_series.index, y=br_rsi_series, mode="lines", name="RSI(14)",
+                    line=dict(color="#4FD1E8", width=1.5),
+                ), row=2, col=1)
+                br_fig.add_hline(y=65, line_dash="dot", line_color="#3ECF8E", row=2, col=1)
+                br_fig.add_hline(y=30, line_dash="dot", line_color="#FF6B6B", row=2, col=1)
+                br_fig.update_layout(
+                    template="plotly_dark", height=480, margin=dict(l=10, r=10, t=30, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis_rangeslider_visible=False, showlegend=False,
+                )
+                st.plotly_chart(br_fig, width="stretch")
+        with br_checklist_col:
+            st.markdown("**Condition checklist**")
+            br_checklist_rows = [
+                ("Close ≥ EMA(10)", f'{br_row["Latest Close"]:.2f} ≥ {br_row["EMA10"]:.2f}',
+                 br_row["Latest Close"] >= br_row["EMA10"]),
+                ("Close ≥ EMA(20)", f'{br_row["Latest Close"]:.2f} ≥ {br_row["EMA20"]:.2f}',
+                 br_row["Latest Close"] >= br_row["EMA20"]),
+                ("Previous close ≤ previous open", f'{br_row["Previous Close"]:.2f} ≤ {br_row["Previous Open"]:.2f}',
+                 br_row["Previous Close"] <= br_row["Previous Open"]),
+                ("Close ≥ previous open", f'{br_row["Latest Close"]:.2f} ≥ {br_row["Previous Open"]:.2f}',
+                 br_row["Latest Close"] >= br_row["Previous Open"]),
+                ("Market cap ≥ ₹2,000 Cr", f'{CURRENCY}{br_row["Market Cap (Cr)"]:,.0f} Cr',
+                 br_row["Market Cap (Cr)"] >= config.BULLISH_RECOVERY_MIN_MARKET_CAP_CR),
+                ("RSI(14) ≥ 65", f'{br_row["RSI"]:.1f}', br_row["RSI"] >= config.BULLISH_RECOVERY_RSI_MIN),
+                (f'Close > {CURRENCY}{br_result["min_price"]:.0f}', f'{br_row["Latest Close"]:.2f}',
+                 br_row["Latest Close"] > br_result["min_price"]),
+            ]
+            for br_label, br_value, br_passed in br_checklist_rows:
+                br_icon = "✅" if br_passed else "❌"
+                st.markdown(
+                    f'<div class="why-item{"" if br_passed else " bad"}">{br_icon} <b>{br_label}</b> — {br_value}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    st.caption(
+        "Every condition (EMA10/EMA20 recovery, prior-day structure, RSI, market cap, price floor) is a "
+        "fixed rule from this strategy's own definition. Not investment advice, and not a guarantee that "
+        "any of these stocks will keep moving in this direction."
+    )
+    render_footer(scan_ts=br_scan_time)
 
 
 # ---------------------------------------------------------------------------
