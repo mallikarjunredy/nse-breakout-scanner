@@ -120,6 +120,22 @@ BULLISH_RECOVERY_RSI_MIN = 65.0
 BULLISH_RECOVERY_MIN_PRICE_INR = 25.0  # this strategy's own floor -- MIN_PRICE_INR (₹100) takes precedence when higher
 BULLISH_RECOVERY_MIN_MARKET_CAP_CR = 2000.0
 
+# "Resistance Breakout" ("Previous Swing High Breakout with Volume
+# Confirmation") -- see src/resistance_breakout.py. Adjustable defaults,
+# like Rising Channel / Trend + Consolidation: unlike Upside Buy Movement
+# or Bullish Recovery, this pattern's exact numbers are judgment calls,
+# not a fixed spec.
+RESISTANCE_BREAKOUT_MIN_PRICE_INR = 100.0
+RESISTANCE_BREAKOUT_PIVOT_N = 3  # candles required on each side to confirm a swing point
+RESISTANCE_BREAKOUT_LOOKBACK_DAYS = 130  # ~6 months, window to search for the "previous high"
+RESISTANCE_BREAKOUT_MIN_HIGH_AGE_DAYS = 15  # previous high must be at least this many sessions old
+RESISTANCE_BREAKOUT_MIN_PULLBACK_PCT = 8.0  # minimum decline off the previous high to count as a real base
+RESISTANCE_BREAKOUT_PREBREAKOUT_DISTANCE_MIN_PCT = 0.0
+RESISTANCE_BREAKOUT_PREBREAKOUT_DISTANCE_MAX_PCT = 5.0
+RESISTANCE_BREAKOUT_BREAKOUT_MIN_PCT = 0.5  # close must clear resistance by at least this %
+RESISTANCE_BREAKOUT_VOLUME_MULT = 1.5
+RESISTANCE_BREAKOUT_VOLUME_AVG_PERIOD = 20
+
 # Paper-trading / backtest defaults for the same strategy.
 TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital
 TREND_CONSOL_BACKTEST_RISK_PCT = 0.5  # % of current equity risked per trade

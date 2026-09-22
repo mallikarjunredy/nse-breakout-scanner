@@ -593,6 +593,81 @@ since only full matches are ever selectable here -- the checklist's
 job is transparency into the numbers behind the match, not surfacing
 near-misses).
 
+## Sixth strategy: "Resistance Breakout" ("Previous Swing High Breakout with Volume Confirmation")
+
+`src/resistance_breakout.py`, page "⛰️ Resistance Breakout" -- built from
+a narrative, screenshot-driven spec (previous high → pullback → recovery
+→ breakout-with-volume), not a numbered rule list, so **adjustable from
+the UI** like Rising Channel / Trend + Consolidation (see
+`default_params()` / config.py's `RESISTANCE_BREAKOUT_*` defaults) --
+unlike Upside Buy Movement or Bullish Recovery, "how far back to look,"
+"how deep a pullback counts as a real base," and "how much volume is
+'visibly higher'" are judgment calls the user should be able to tune,
+not a fixed spec.
+
+**Explicitly NOT a cup-and-handle pattern**: that requires a distinct
+handle (a second, shallower pullback right before the breakout), which
+this rule set never checks for. The recovery leg often *looks*
+cup-shaped -- nothing more specific than that is claimed anywhere in
+the UI or code.
+
+**The four stages, as rules** (`evaluate_ticker`):
+
+- **Previous high**: `_find_previous_high` reuses
+  `rising_channel.find_swing_points` as-is (already a generic, leak-free
+  swing-point detector with no Rising-Channel-specific coupling) over
+  the trailing `resistance_lookback_days` (default 130, ~6 months)
+  window, and takes the *highest* swing high that's at least
+  `min_high_age_days` (default 15) sessions old -- old enough that it's
+  a genuine *previous* high, not one still forming into today.
+- **Pullback**: `_pullback_info` finds the lowest Low between that
+  previous high and today; `min_pullback_pct` (default 8%) is the
+  minimum decline required for it to count as a real base rather than
+  noise.
+- **Recovery / Pre-Breakout Watchlist**: today's close is at/below the
+  resistance, within the `prebreakout_distance_min/max_pct` (default
+  0-5%) band -- approaching, not yet broken out.
+- **Breakout, with volume**: yesterday's close was at/below resistance
+  (plus `breakout_min_pct` clearance) and today's close clears it -- a
+  fresh breakout, not one that happened days ago. If today's volume is
+  also ≥ `breakout_volume_mult` (default 1.5x) times the preceding
+  `breakout_volume_avg_period` (20) -session average, it's a
+  **Confirmed Breakout**; the identical price condition without that
+  volume confirmation is **Breakout — Volume Unconfirmed** instead,
+  computed in the same pass, never silently dropped.
+
+**Why one swing search is enough, unlike Rising Channel's frozen-
+through-yesterday channel fit**: the previous high sits
+`min_high_age_days` sessions back by construction, so it can never be
+affected by yesterday's or today's bar the way a freshly-fitted sloped
+channel could -- one as-of-today swing search safely evaluates both
+yesterday's and today's close against it, with no separate lookahead
+risk to freeze against.
+
+**Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks"
+(same loaders as Upside Buy Movement/Bullish Recovery), mandatory
+`config.RESISTANCE_BREAKOUT_MIN_PRICE_INR` (₹100) floor shown as a
+caption, not a slider (matching Rising Channel/Trend + Consolidation's
+own price-floor treatment). Own cache
+(`st.session_state.resistance_breakout_cache`, keyed by
+`(universe_name, sorted(params.items()))`, same auto-scan-on-cache-miss
+pattern as the other adjustable strategies), not logged to
+`scan_history`.
+
+**Results tables**: three tabs (Pre-Breakout Watchlist / Confirmed
+Breakouts / Breakout — Volume Unconfirmed), each with Symbol, Company
+Name, Setup Status, Signal Date, Current Price, Resistance Level
+("Previous High"), Resistance Date, Pullback Low, Pullback %, Distance
+%, Volume Ratio. Selecting a row sets a page-local
+`st.session_state.rbo_selected_ticker` (like `rc_selected_ticker`), not
+the shared detail panel, and loads
+`resistance_breakout.build_breakout_chart()`: a 2-row Plotly subplot
+(price + a flat previous-high resistance line drawn from the previous-
+high candle to the signal candle, with ▽/△ markers for the previous
+high and pullback low / Volume, with the signal day's bar highlighted
+orange) so "visibly higher volume" is literally visible at a glance --
+plus the row's own "Why Qualified" string underneath.
+
 ## Home page layout: terminal-style split
 
 Top to bottom:

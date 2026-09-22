@@ -16,8 +16,8 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 
 from src import (
-    bullish_recovery, config, deep_dive, detail, indicators, market_overview, pre_breakout, rising_channel,
-    scan_history, scanner, trend_consolidation, watchlist,
+    bullish_recovery, config, deep_dive, detail, indicators, market_overview, pre_breakout, resistance_breakout,
+    rising_channel, scan_history, scanner, trend_consolidation, watchlist,
 )
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
@@ -149,6 +149,10 @@ if "bullish_recovery_cache" not in st.session_state:
     st.session_state.bullish_recovery_cache = {}  # keyed by universe_name -- (timestamp, result)
 if "br_selected_ticker" not in st.session_state:
     st.session_state.br_selected_ticker = None
+if "resistance_breakout_cache" not in st.session_state:
+    st.session_state.resistance_breakout_cache = {}  # keyed by (universe_name, sorted(params.items()))
+if "rbo_selected_ticker" not in st.session_state:
+    st.session_state.rbo_selected_ticker = None
 if "watchlist_cache" not in st.session_state:
     st.session_state.watchlist_cache = {}
 if "selected_ticker" not in st.session_state:
@@ -277,7 +281,8 @@ _NAV_ITEMS = [
     ("Home", "🏠"), ("Upside Buy Movement", "🎯"), ("Upside Buy Movement above 100", "💹"),
     ("Daily Rising Channel", "📐"), ("Daily Trend + Consolidation", "🧭"),
     ("Trend + Consolidation Backtest", "🧪"), ("Bullish Recovery Above EMAs", "🌅"),
-    ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
+    ("Resistance Breakout", "⛰️"), ("Watchlist", "⭐"), ("Stock Analysis", "📈"),
+    ("Scan History", "🕐"), ("Help & Support", "❓"),
 ]
 
 with st.sidebar:
@@ -2322,6 +2327,210 @@ if nav_page == "Bullish Recovery Above EMAs":
         "any of these stocks will keep moving in this direction."
     )
     render_footer(scan_ts=br_scan_time)
+
+
+# ---------------------------------------------------------------------------
+# Page: Resistance Breakout ("Previous Swing High Breakout with Volume
+# Confirmation")
+# ---------------------------------------------------------------------------
+
+_RBO_COLUMN_ORDER = [
+    "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
+    "Resistance Level", "Resistance Date", "Pullback Low", "Pullback %", "% Below Resistance", "Volume Ratio",
+]
+_RBO_COLUMN_CONFIG = {
+    "Rank": st.column_config.NumberColumn("Rank", width="small"),
+    "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+    "Company Name": st.column_config.TextColumn("Company Name"),
+    "Setup Status": st.column_config.TextColumn("Status", width="small"),
+    "Signal Date": st.column_config.TextColumn("Signal Date", width="small"),
+    "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
+    "Resistance Level": st.column_config.NumberColumn("Previous High", format="₹%.2f"),
+    "Resistance Date": st.column_config.TextColumn("High Date", width="small"),
+    "Pullback Low": st.column_config.NumberColumn("Pullback Low", format="₹%.2f"),
+    "Pullback %": st.column_config.NumberColumn("Pullback %", format="%.1f%%"),
+    "% Below Resistance": st.column_config.NumberColumn("Distance %", format="%.2f%%"),
+    "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+}
+
+
+def _render_rbo_tab(df: pd.DataFrame, key_prefix: str):
+    if df.empty:
+        st.info("No stocks matched your saved strategy in this scan.")
+        return
+    _export_buttons(df, key_prefix, key_prefix)
+    event = st.dataframe(
+        df, hide_index=True, width="stretch", column_config=_RBO_COLUMN_CONFIG,
+        column_order=[c for c in _RBO_COLUMN_ORDER if c in df.columns],
+        on_select="rerun", selection_mode="single-row", key=f"{key_prefix}_table",
+    )
+    rows = event["selection"]["rows"]
+    if rows:
+        st.session_state.rbo_selected_ticker = df.iloc[rows[0]]["Ticker"]
+
+
+if nav_page == "Resistance Breakout":
+    st.markdown("### ⛰️ Resistance Breakout — Previous Swing High Breakout with Volume Confirmation")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "A stock previously reached a price it could not move beyond (a confirmed swing high -- its "
+        "resistance), fell into a genuine pullback and base, recovered back toward that old high, and now "
+        "either approaches it (Pre-Breakout Watchlist) or has closed above it on visibly higher volume "
+        "(Confirmed Breakout / Breakout — Volume Unconfirmed). This is NOT a confirmed cup-and-handle "
+        "pattern -- that requires a distinct handle before the breakout, which isn't checked for here; the "
+        "recovery leg may simply look cup-shaped. Rule-based scanner matches, not guaranteed profitable "
+        "recommendations."
+    )
+
+    rbo_universe_choice = st.radio(
+        "Universe", ["Nifty 500", "All Stocks"], horizontal=True, key="rbo_universe",
+    )
+    rbo_universe_name = "nifty500" if rbo_universe_choice == "Nifty 500" else "all_nse"
+    st.caption(f"✅ Mandatory: closing price > ₹{config.RESISTANCE_BREAKOUT_MIN_PRICE_INR:.0f}.")
+
+    with st.expander("⚙️ Adjust Thresholds"):
+        rc1, rc2, rc3 = st.columns(3)
+        rbo_lookback = rc1.slider(
+            "Previous-High Lookback (sessions)", 60, 250, config.RESISTANCE_BREAKOUT_LOOKBACK_DAYS, 10,
+            key="rbo_lookback", help="How far back to search for the previous swing high (resistance).",
+        )
+        rbo_high_age = rc2.slider(
+            "Min. Previous-High Age (sessions)", 5, 60, config.RESISTANCE_BREAKOUT_MIN_HIGH_AGE_DAYS, 5,
+            key="rbo_high_age", help="The previous high must be at least this many sessions old.",
+        )
+        rbo_pullback = rc3.slider(
+            "Min. Pullback (%)", 3.0, 25.0, config.RESISTANCE_BREAKOUT_MIN_PULLBACK_PCT, 1.0,
+            key="rbo_pullback", help="Minimum decline off the previous high to count as a real base.",
+        )
+        rc4, rc5, rc6 = st.columns(3)
+        rbo_distance = rc4.slider(
+            "Distance to Resistance (%)", 0.0, 15.0,
+            (config.RESISTANCE_BREAKOUT_PREBREAKOUT_DISTANCE_MIN_PCT, config.RESISTANCE_BREAKOUT_PREBREAKOUT_DISTANCE_MAX_PCT),
+            0.5, key="rbo_distance", help="Pre-Breakout Watchlist band: how close to (but below) resistance.",
+        )
+        rbo_breakout_min = rc5.slider(
+            "Breakout Min. Clearance (%)", 0.1, 3.0, config.RESISTANCE_BREAKOUT_BREAKOUT_MIN_PCT, 0.1,
+            key="rbo_breakout_min", help="Close must clear resistance by at least this %.",
+        )
+        rbo_vol_mult = rc6.slider(
+            "Breakout Volume Multiplier", 1.0, 4.0, config.RESISTANCE_BREAKOUT_VOLUME_MULT, 0.1,
+            key="rbo_vol_mult",
+        )
+        rbo_pivot_n = st.slider(
+            "Swing Confirmation Bars (each side)", 2, 6, config.RESISTANCE_BREAKOUT_PIVOT_N, 1,
+            key="rbo_pivot_n", help="Bars required on each side of a candle for it to count as a swing high/low.",
+        )
+
+    rbo_params = resistance_breakout.default_params()
+    rbo_params.update({
+        "resistance_lookback_days": rbo_lookback,
+        "min_high_age_days": rbo_high_age,
+        "min_pullback_pct": rbo_pullback,
+        "prebreakout_distance_min_pct": rbo_distance[0],
+        "prebreakout_distance_max_pct": rbo_distance[1],
+        "breakout_min_pct": rbo_breakout_min,
+        "breakout_volume_mult": rbo_vol_mult,
+        "pivot_n": rbo_pivot_n,
+    })
+    rbo_cache_key = (rbo_universe_name, tuple(sorted(rbo_params.items())))
+
+    rbo_cache = st.session_state.resistance_breakout_cache.get(rbo_cache_key)
+    run_rbo_clicked = st.button("▶️ Run Resistance Breakout Scan", type="primary", key="run_resistance_breakout")
+
+    if run_rbo_clicked or rbo_cache is None:
+        rbo_progress = st.progress(0, text="Starting scan...")
+
+        def _on_rbo_progress(frac, text_):
+            rbo_progress.progress(min(frac, 1.0), text=text_)
+
+        try:
+            with st.spinner(f"Scanning {rbo_universe_choice} for Resistance Breakout setups..."):
+                result_rbo = resistance_breakout.scan_resistance_breakout(
+                    universe_name=rbo_universe_name, min_price=config.RESISTANCE_BREAKOUT_MIN_PRICE_INR,
+                    params=rbo_params, progress_callback=_on_rbo_progress,
+                )
+            rbo_progress.empty()
+            st.session_state.resistance_breakout_cache[rbo_cache_key] = (time.time(), result_rbo)
+        except Exception as exc:
+            rbo_progress.empty()
+            st.error(f"Scan failed: {exc}. This is usually a temporary Yahoo Finance or network issue -- try again.")
+            result_rbo = None
+    else:
+        result_rbo = rbo_cache[1]
+
+    if result_rbo is None:
+        st.stop()
+
+    rbo_scan_time = st.session_state.resistance_breakout_cache[rbo_cache_key][0]
+    rbo_scan_label = datetime.datetime.fromtimestamp(rbo_scan_time, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
+    rbo_asof = result_rbo.get("data_asof_date")
+    rbo_asof_label = rbo_asof.strftime("%d %b %Y") if rbo_asof else "N/A"
+    st.caption(
+        f"Last scanned: {rbo_scan_label} · Prices as of {rbo_asof_label} close · "
+        f"Universe: {result_rbo['universe_label']} ({result_rbo['universe_size']} instruments) · "
+        f"Scanned OK: {result_rbo['scanned']}"
+    )
+    rbo_next_refresh_in = config.SCAN_CACHE_TTL_SECONDS - (time.time() - rbo_scan_time)
+    if rbo_next_refresh_in <= 0:
+        st.caption("⏳ This data may be stale -- use ▶️ Run Resistance Breakout Scan for the latest.")
+
+    pre_df_rbo = result_rbo["pre_breakout"]
+    confirmed_df_rbo = result_rbo["confirmed_breakout"]
+    unconfirmed_df_rbo = result_rbo["volume_unconfirmed"]
+
+    tab_pre_rbo, tab_confirmed_rbo, tab_unconfirmed_rbo = st.tabs([
+        f"👀 Pre-Breakout Watchlist ({len(pre_df_rbo)})",
+        f"🚀 Confirmed Breakouts ({len(confirmed_df_rbo)})",
+        f"⚠️ Breakout — Volume Unconfirmed ({len(unconfirmed_df_rbo)})",
+    ])
+    with tab_pre_rbo:
+        st.caption("Recovering toward the previous high, within the configured distance band. Not a guaranteed breakout.")
+        _render_rbo_tab(pre_df_rbo, "rbo_pre")
+    with tab_confirmed_rbo:
+        st.caption("Closed above the previous high, on the required volume.")
+        _render_rbo_tab(confirmed_df_rbo, "rbo_confirmed")
+    with tab_unconfirmed_rbo:
+        st.caption("Same price breakout, but volume didn't confirm it -- treat with extra caution.")
+        _render_rbo_tab(unconfirmed_df_rbo, "rbo_unconfirmed")
+
+    st.divider()
+    st.markdown("#### 📊 Selected Candidate Chart")
+    rbo_ticker = st.session_state.rbo_selected_ticker
+    if not rbo_ticker:
+        st.caption("👆 Click a row in any table above to see its breakout chart here.")
+    else:
+        rbo_res_idx = result_rbo["resistance_idx"].get(rbo_ticker)
+        rbo_pb_idx = result_rbo["pullback_idx"].get(rbo_ticker)
+        rbo_sig_idx = result_rbo["signal_idx"].get(rbo_ticker)
+        rbo_combined = pd.concat([pre_df_rbo, confirmed_df_rbo, unconfirmed_df_rbo], ignore_index=True)
+        rbo_match = rbo_combined[rbo_combined["Ticker"] == rbo_ticker]
+        if rbo_res_idx is None or rbo_pb_idx is None or rbo_sig_idx is None or rbo_match.empty:
+            st.caption(f"No breakout data for {rbo_ticker} under the current scan -- select a row above again.")
+        else:
+            rbo_row = rbo_match.iloc[0]
+            with st.spinner(f"Loading chart for {rbo_ticker}..."):
+                rbo_chart_history = scanner.download_history([rbo_ticker])
+            rbo_chart_df = rbo_chart_history.get(rbo_ticker)
+            if rbo_chart_df is None:
+                st.caption("Price history unavailable for this ticker right now.")
+            else:
+                rbo_fig = resistance_breakout.build_breakout_chart(
+                    rbo_chart_df, rbo_res_idx, float(rbo_row["Resistance Level"]),
+                    rbo_pb_idx, float(rbo_row["Pullback Low"]), rbo_sig_idx, rbo_ticker,
+                )
+                st.plotly_chart(rbo_fig, width="stretch")
+                st.caption(
+                    "Red ▽ = previous high (resistance). Green △ = pullback low. Orange marker = the signal "
+                    "candle; its Volume bar is also highlighted orange, so a volume spike is visible at a glance."
+                )
+                st.markdown(f"**Why qualified:**\n\n{rbo_row['Why Qualified']}")
+
+    st.caption(
+        "The previous-high/pullback/recovery/breakout structure and volume confirmation are rule-based "
+        "checks against this strategy's own adjustable thresholds -- not guaranteed profitable "
+        "recommendations, and not a claim that any stock will keep moving in this direction."
+    )
+    render_footer(scan_ts=rbo_scan_time)
 
 
 # ---------------------------------------------------------------------------
