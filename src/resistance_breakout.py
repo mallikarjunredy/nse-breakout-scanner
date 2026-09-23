@@ -30,6 +30,15 @@ bar, so (unlike Rising Channel's frozen-through-yesterday channel fit)
 one as-of-today swing search is enough to safely evaluate both
 yesterday's and today's close against it -- there's no separate
 lookahead risk to freeze against.
+
+Momentum gate (added at the user's request after finding lookalikes like
+KIMS/Max Healthcare in the watchlist -- stocks just sitting flat near the
+previous high with no real forward movement behind them): close must be
+up at least `min_momentum_pct` over the trailing `momentum_lookback_days`
+sessions for a ticker to qualify at all, in *either* tier. This is a
+simple rate-of-change check, not a trend-quality score -- it only asks
+"has this actually moved recently," which is enough to separate a fresh
+recovery from a stock stuck oscillating sideways.
 """
 
 import pandas as pd
@@ -56,6 +65,8 @@ def default_params() -> dict:
         "breakout_min_pct": config.RESISTANCE_BREAKOUT_BREAKOUT_MIN_PCT,
         "breakout_volume_mult": config.RESISTANCE_BREAKOUT_VOLUME_MULT,
         "breakout_volume_avg_period": config.RESISTANCE_BREAKOUT_VOLUME_AVG_PERIOD,
+        "momentum_lookback_days": config.RESISTANCE_BREAKOUT_MOMENTUM_LOOKBACK_DAYS,
+        "min_momentum_pct": config.RESISTANCE_BREAKOUT_MIN_MOMENTUM_PCT,
     }
 
 
@@ -126,6 +137,20 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     if pullback_pct < params["min_pullback_pct"]:
         return None
 
+    # Momentum gate: excludes stocks just sitting flat/consolidating near
+    # the previous high with no real forward movement behind them -- close
+    # must be up at least min_momentum_pct over the trailing
+    # momentum_lookback_days for a ticker to qualify as "trending" at all.
+    mom_lb = params["momentum_lookback_days"]
+    if today_idx - mom_lb < 0:
+        return None
+    price_mom_ago = float(df["Close"].iloc[today_idx - mom_lb])
+    if price_mom_ago <= 0:
+        return None
+    momentum_pct = (price_today - price_mom_ago) / price_mom_ago * 100
+    if momentum_pct < params["min_momentum_pct"]:
+        return None
+
     resistance_date = df.index[resistance_idx].strftime("%Y-%m-%d")
     resistance_age_days = today_idx - resistance_idx
 
@@ -144,6 +169,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "Resistance Date": resistance_date,
         "Pullback Low": round(pullback_low, 2),
         "Pullback %": round(pullback_pct, 2),
+        "Momentum %": round(momentum_pct, 2),
         "Volume Ratio": round(vol_ratio_today, 2) if vol_ratio_today is not None else None,
         "_resistance_idx": resistance_idx,
         "_pullback_idx": pullback_idx,
@@ -160,6 +186,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
             why = [
                 f"✓ Previous high found on {resistance_date} at ₹{resistance:.2f} ({resistance_age_days} sessions ago)",
                 f"✓ Pulled back {pullback_pct:.1f}% to a low of ₹{pullback_low:.2f} before recovering",
+                f"✓ Trending, not flat: close is up {momentum_pct:.1f}% over the last {mom_lb} sessions",
                 f"✓ Yesterday's close (₹{price_prev:.2f}) was at/below resistance",
                 f"✓ Today's close (₹{price_today:.2f}) cleared resistance by more than {params['breakout_min_pct']:.1f}%",
             ]
@@ -185,6 +212,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
             why = [
                 f"✓ Previous high found on {resistance_date} at ₹{resistance:.2f} ({resistance_age_days} sessions ago)",
                 f"✓ Pulled back {pullback_pct:.1f}% to a low of ₹{pullback_low:.2f} before recovering",
+                f"✓ Trending, not flat: close is up {momentum_pct:.1f}% over the last {mom_lb} sessions",
                 f"✓ Close (₹{price_today:.2f}) is {distance_pct:.2f}% below that resistance -- "
                 f"approaching, not yet broken out",
             ]
@@ -200,8 +228,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
 
 _DISPLAY_COLUMNS = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "Resistance Level", "Resistance Date", "Pullback Low", "Pullback %", "% Below Resistance",
-    "Volume Ratio", "Why Qualified",
+    "Resistance Level", "Resistance Date", "Pullback Low", "Pullback %", "Momentum %",
+    "% Below Resistance", "Volume Ratio", "Why Qualified",
 ]
 
 

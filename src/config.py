@@ -135,6 +135,12 @@ RESISTANCE_BREAKOUT_PREBREAKOUT_DISTANCE_MAX_PCT = 5.0
 RESISTANCE_BREAKOUT_BREAKOUT_MIN_PCT = 0.5  # close must clear resistance by at least this %
 RESISTANCE_BREAKOUT_VOLUME_MULT = 1.5
 RESISTANCE_BREAKOUT_VOLUME_AVG_PERIOD = 20
+# Momentum gate added at the user's request: excludes stocks that are just
+# sitting flat/consolidating near the previous high with no real forward
+# movement behind them (e.g. KIMS, Max Healthcare) -- close must be up at
+# least this % over the trailing lookback for a ticker to qualify at all.
+RESISTANCE_BREAKOUT_MOMENTUM_LOOKBACK_DAYS = 10
+RESISTANCE_BREAKOUT_MIN_MOMENTUM_PCT = 3.0
 
 # "Triple EMA Golden Cross" -- see src/triple_ema_golden_cross.py.
 # Adjustable defaults, like Rising Channel / Trend + Consolidation /

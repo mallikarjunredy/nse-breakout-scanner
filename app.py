@@ -2340,7 +2340,8 @@ if nav_page == "Bullish Recovery Above EMAs":
 
 _RBO_COLUMN_ORDER = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "Resistance Level", "Resistance Date", "Pullback Low", "Pullback %", "% Below Resistance", "Volume Ratio",
+    "Resistance Level", "Resistance Date", "Pullback Low", "Pullback %", "Momentum %",
+    "% Below Resistance", "Volume Ratio",
 ]
 _RBO_COLUMN_CONFIG = {
     "Rank": st.column_config.NumberColumn("Rank", width="small"),
@@ -2353,6 +2354,7 @@ _RBO_COLUMN_CONFIG = {
     "Resistance Date": st.column_config.TextColumn("High Date", width="small"),
     "Pullback Low": st.column_config.NumberColumn("Pullback Low", format="₹%.2f"),
     "Pullback %": st.column_config.NumberColumn("Pullback %", format="%.1f%%"),
+    "Momentum %": st.column_config.NumberColumn("Momentum %", format="%+.1f%%"),
     "% Below Resistance": st.column_config.NumberColumn("Distance %", format="%.2f%%"),
     "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
 }
@@ -2382,8 +2384,9 @@ if nav_page == "Resistance Breakout":
         "either approaches it (Pre-Breakout Watchlist) or has closed above it on visibly higher volume "
         "(Confirmed Breakout / Breakout — Volume Unconfirmed). This is NOT a confirmed cup-and-handle "
         "pattern -- that requires a distinct handle before the breakout, which isn't checked for here; the "
-        "recovery leg may simply look cup-shaped. Rule-based scanner matches, not guaranteed profitable "
-        "recommendations."
+        "recovery leg may simply look cup-shaped. A minimum-momentum gate excludes stocks just sitting "
+        "flat/consolidating near the previous high with no real forward movement behind them. Rule-based "
+        "scanner matches, not guaranteed profitable recommendations."
     )
 
     rbo_universe_choice = st.radio(
@@ -2420,9 +2423,20 @@ if nav_page == "Resistance Breakout":
             "Breakout Volume Multiplier", 1.0, 4.0, config.RESISTANCE_BREAKOUT_VOLUME_MULT, 0.1,
             key="rbo_vol_mult",
         )
-        rbo_pivot_n = st.slider(
+        rc7, rc8 = st.columns(2)
+        rbo_pivot_n = rc7.slider(
             "Swing Confirmation Bars (each side)", 2, 6, config.RESISTANCE_BREAKOUT_PIVOT_N, 1,
             key="rbo_pivot_n", help="Bars required on each side of a candle for it to count as a swing high/low.",
+        )
+        rbo_momentum_lookback = rc8.slider(
+            "Momentum Lookback (sessions)", 3, 30, config.RESISTANCE_BREAKOUT_MOMENTUM_LOOKBACK_DAYS, 1,
+            key="rbo_momentum_lookback", help="How many sessions back to measure recent price momentum over.",
+        )
+        rbo_min_momentum = st.slider(
+            "Min. Momentum (%)", 0.0, 15.0, config.RESISTANCE_BREAKOUT_MIN_MOMENTUM_PCT, 0.5,
+            key="rbo_min_momentum",
+            help="Close must be up at least this % over the momentum lookback -- excludes stocks just "
+                 "sitting flat/consolidating with no real forward movement.",
         )
 
     rbo_params = resistance_breakout.default_params()
@@ -2435,6 +2449,8 @@ if nav_page == "Resistance Breakout":
         "breakout_min_pct": rbo_breakout_min,
         "breakout_volume_mult": rbo_vol_mult,
         "pivot_n": rbo_pivot_n,
+        "momentum_lookback_days": rbo_momentum_lookback,
+        "min_momentum_pct": rbo_min_momentum,
     })
     rbo_cache_key = (rbo_universe_name, tuple(sorted(rbo_params.items())))
 

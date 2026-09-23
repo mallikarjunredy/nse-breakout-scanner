@@ -644,6 +644,22 @@ channel could -- one as-of-today swing search safely evaluates both
 yesterday's and today's close against it, with no separate lookahead
 risk to freeze against.
 
+**Momentum gate** (added after the user found lookalikes like KIMS and
+Max Healthcare in the watchlist -- stocks just sitting flat near the
+previous high with no real forward movement behind them): close must be
+up at least `min_momentum_pct` (default 3%) over the trailing
+`momentum_lookback_days` (default 10) sessions for a ticker to qualify
+at all, in *either* tier -- checked right after the pullback-depth gate
+in `evaluate_ticker`. This is a plain rate-of-change check, not a
+trend-quality score; it only asks "has this actually moved recently,"
+which is enough to separate a fresh recovery from a stock oscillating
+sideways. Verified against real data: dropped the Nifty 500 watchlist
+count from 27 to 8 matches, correctly excluding both KIMS (+3.6%, but
+still filtered out separately by the existing 0-5% distance-to-
+resistance band -- it was 7.4% away) and Max Healthcare (+2.1%, below
+the 3% momentum floor) while every remaining match showed clear
+positive momentum.
+
 **Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks"
 (same loaders as Upside Buy Movement/Bullish Recovery), mandatory
 `config.RESISTANCE_BREAKOUT_MIN_PRICE_INR` (₹100) floor shown as a
@@ -657,8 +673,8 @@ pattern as the other adjustable strategies), not logged to
 **Results tables**: three tabs (Pre-Breakout Watchlist / Confirmed
 Breakouts / Breakout — Volume Unconfirmed), each with Symbol, Company
 Name, Setup Status, Signal Date, Current Price, Resistance Level
-("Previous High"), Resistance Date, Pullback Low, Pullback %, Distance
-%, Volume Ratio. Selecting a row sets a page-local
+("Previous High"), Resistance Date, Pullback Low, Pullback %, Momentum
+%, Distance %, Volume Ratio. Selecting a row sets a page-local
 `st.session_state.rbo_selected_ticker` (like `rc_selected_ticker`), not
 the shared detail panel, and loads
 `resistance_breakout.build_breakout_chart()`: a 2-row Plotly subplot
