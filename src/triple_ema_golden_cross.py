@@ -25,6 +25,18 @@ Resistance Breakout) -- see default_params() / config.py's
 TRIPLE_EMA_* defaults -- since this pattern came from a visual
 description, not a numbered spec, so its exact periods and thresholds
 are reasonable defaults the user should be able to tune, not fixed rules.
+
+Momentum gate (added at the user's request after finding a lookalike --
+Aditya Birla Capital, a weak just-formed cross where the three EMAs were
+all bunched within about a rupee of each other on a stock that had
+actually rolled over and gone flat/negative over the prior 10-20
+sessions): close must be up at least `min_momentum_pct` over the
+trailing `momentum_lookback_days` sessions for a ticker to qualify at
+all, in any of the three statuses. Same rate-of-change design as
+Resistance Breakout's own momentum gate -- it only asks "has this
+actually moved recently," which is enough to separate a fresh,
+genuinely trending cross from a technically-valid-but-meaningless one
+sitting inside a flat tangle.
 """
 
 import pandas as pd
@@ -51,6 +63,8 @@ def default_params() -> dict:
         "rsi_max": config.TRIPLE_EMA_RSI_MAX,
         "breakout_volume_mult": config.TRIPLE_EMA_BREAKOUT_VOLUME_MULT,
         "breakout_volume_avg_period": config.TRIPLE_EMA_BREAKOUT_VOLUME_AVG_PERIOD,
+        "momentum_lookback_days": config.TRIPLE_EMA_MOMENTUM_LOOKBACK_DAYS,
+        "min_momentum_pct": config.TRIPLE_EMA_MIN_MOMENTUM_PCT,
     }
 
 
@@ -113,6 +127,21 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     cross_date = df.index[cross_idx].strftime("%Y-%m-%d")
     cross_age_days = today_idx - cross_idx
 
+    # Momentum gate: excludes a weak, just-formed cross where the EMAs
+    # are all bunched together on a flat/rolling-over stock (e.g. Aditya
+    # Birla Capital tangling near its EMAs after rolling over from a
+    # high) -- close must be up at least min_momentum_pct over the
+    # trailing momentum_lookback_days for a ticker to qualify at all.
+    mom_lb = params["momentum_lookback_days"]
+    if today_idx - mom_lb < 0:
+        return None
+    price_mom_ago = float(close.iloc[today_idx - mom_lb])
+    if price_mom_ago <= 0:
+        return None
+    momentum_pct = (price_today - price_mom_ago) / price_mom_ago * 100
+    if momentum_pct < params["min_momentum_pct"]:
+        return None
+
     rising_lb = params["ema_rising_lookback_days"]
     def _rising(series: pd.Series) -> bool:
         return today_idx - rising_lb >= 0 and series.iloc[today_idx] > series.iloc[today_idx - rising_lb]
@@ -140,6 +169,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     why = [
         f"✓ Golden Cross: EMA{params['ema_fast']} crossed above EMA{params['ema_slow']} on "
         f"{cross_date} ({cross_age_days} sessions ago), still holding above it",
+        f"✓ Trending, not flat: close is up {momentum_pct:.1f}% over the last {mom_lb} sessions",
         f"✓ RSI {rsi_now:.1f} within the {params['rsi_min']:.0f}-{params['rsi_max']:.0f} healthy range",
     ]
     if aligned:
@@ -169,6 +199,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "EMA Slow": round(ema_slow_now, 2),
         "Golden Cross Date": cross_date,
         "Days Since Cross": cross_age_days,
+        "Momentum %": round(momentum_pct, 2),
         "RSI": round(rsi_now, 1),
         "Volume Ratio": round(vol_ratio_today, 2) if vol_ratio_today is not None else None,
         "Why Qualified": "\n".join(why),
@@ -180,8 +211,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
 _STATUS_ORDER = {"Confirmed Breakout": 0, "Bullish Alignment": 1, "Golden Cross Formed": 2}
 _DISPLAY_COLUMNS = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "EMA Fast", "EMA Mid", "EMA Slow", "Golden Cross Date", "Days Since Cross", "RSI", "Volume Ratio",
-    "Why Qualified",
+    "EMA Fast", "EMA Mid", "EMA Slow", "Golden Cross Date", "Days Since Cross", "Momentum %", "RSI",
+    "Volume Ratio", "Why Qualified",
 ]
 
 

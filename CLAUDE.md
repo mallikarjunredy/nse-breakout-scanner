@@ -717,6 +717,20 @@ to right:
   is ≥ `breakout_volume_mult` (default 1.5x) times the preceding
   `breakout_volume_avg_period` (20) -session average.
 
+**Momentum gate** (added after the user found a lookalike -- Aditya
+Birla Capital, a weak just-formed cross where the three EMAs were all
+bunched within about a rupee of each other on a stock that had actually
+rolled over and gone flat/negative over the prior 10-20 sessions): close
+must be up at least `min_momentum_pct` (default 3%) over the trailing
+`momentum_lookback_days` (default 10) sessions for a ticker to qualify
+at all, in any of the three statuses -- checked right after the golden-
+cross detection in `evaluate_ticker`, same rate-of-change design as
+Resistance Breakout's own momentum gate. Verified against real data:
+dropped the Nifty 500 counts from 51/41/14 to 13/23/6 (Golden Cross
+Formed / Bullish Alignment / Confirmed Breakout), correctly excluded
+Aditya Birla Capital entirely, and every remaining match showed clear
+positive momentum (3-24%).
+
 **Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks",
 mandatory `config.TRIPLE_EMA_MIN_PRICE_INR` (₹100) floor shown as a
 caption (not a slider, matching the other adjustable strategies' own
@@ -727,7 +741,7 @@ sorted(params.items()))`), not logged to `scan_history`.
 **Results tables**: three tabs (Golden Cross Formed / Bullish Alignment
 / Confirmed Breakout), each with Symbol, Company Name, Setup Status,
 Signal Date, Current Price, EMA Fast/Mid/Slow, Golden Cross Date, Days
-Since Cross, RSI, Volume Ratio. Selecting a row sets a page-local
+Since Cross, Momentum %, RSI, Volume Ratio. Selecting a row sets a page-local
 `st.session_state.teg_selected_ticker` (like `rc_selected_ticker`/
 `rbo_selected_ticker`) and loads
 `triple_ema_golden_cross.build_golden_cross_chart()`: a 3-row Plotly

@@ -2559,7 +2559,8 @@ if nav_page == "Resistance Breakout":
 
 _TEG_COLUMN_ORDER = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "EMA Fast", "EMA Mid", "EMA Slow", "Golden Cross Date", "Days Since Cross", "RSI", "Volume Ratio",
+    "EMA Fast", "EMA Mid", "EMA Slow", "Golden Cross Date", "Days Since Cross", "Momentum %", "RSI",
+    "Volume Ratio",
 ]
 _TEG_COLUMN_CONFIG = {
     "Rank": st.column_config.NumberColumn("Rank", width="small"),
@@ -2573,6 +2574,7 @@ _TEG_COLUMN_CONFIG = {
     "EMA Slow": st.column_config.NumberColumn("EMA Slow", format="₹%.2f"),
     "Golden Cross Date": st.column_config.TextColumn("Cross Date", width="small"),
     "Days Since Cross": st.column_config.NumberColumn("Days Since Cross"),
+    "Momentum %": st.column_config.NumberColumn("Momentum %", format="%+.1f%%"),
     "RSI": st.column_config.NumberColumn("RSI14", format="%.1f"),
     "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
 }
@@ -2601,7 +2603,9 @@ if nav_page == "Triple EMA Golden Cross":
         "crosses above the slow EMA (a golden cross) and the three fan out into full bullish order -- "
         "Close > EMA-fast > EMA-mid > EMA-slow, all rising -- with RSI in a healthy range. A volume spike "
         "on top of that full alignment is a Confirmed Breakout; the same alignment without one is still "
-        "building. Rule-based scanner matches, not guaranteed profitable recommendations."
+        "building. A minimum-momentum gate excludes weak, just-formed crosses where the EMAs are bunched "
+        "together on a flat/rolling-over stock. Rule-based scanner matches, not guaranteed profitable "
+        "recommendations."
     )
 
     teg_universe_choice = st.radio(
@@ -2627,6 +2631,17 @@ if nav_page == "Triple EMA Golden Cross":
         teg_vol_mult = te6.slider(
             "Breakout Volume Multiplier", 1.0, 4.0, config.TRIPLE_EMA_BREAKOUT_VOLUME_MULT, 0.1, key="teg_vol_mult",
         )
+        te7, te8 = st.columns(2)
+        teg_momentum_lookback = te7.slider(
+            "Momentum Lookback (sessions)", 3, 30, config.TRIPLE_EMA_MOMENTUM_LOOKBACK_DAYS, 1,
+            key="teg_momentum_lookback", help="How many sessions back to measure recent price momentum over.",
+        )
+        teg_min_momentum = te8.slider(
+            "Min. Momentum (%)", 0.0, 15.0, config.TRIPLE_EMA_MIN_MOMENTUM_PCT, 0.5,
+            key="teg_min_momentum",
+            help="Close must be up at least this % over the momentum lookback -- excludes a weak, "
+                 "just-formed cross where the EMAs are bunched together on a flat/rolling-over stock.",
+        )
         if not (teg_ema_fast < teg_ema_mid < teg_ema_slow):
             st.warning("⚠️ EMA periods should be Fast < Mid < Slow for this pattern to make sense.")
 
@@ -2639,6 +2654,8 @@ if nav_page == "Triple EMA Golden Cross":
         "rsi_min": float(teg_rsi[0]),
         "rsi_max": float(teg_rsi[1]),
         "breakout_volume_mult": teg_vol_mult,
+        "momentum_lookback_days": teg_momentum_lookback,
+        "min_momentum_pct": teg_min_momentum,
     })
     teg_cache_key = (teg_universe_name, tuple(sorted(teg_params.items())))
 

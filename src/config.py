@@ -156,6 +156,13 @@ TRIPLE_EMA_RSI_MIN = 45.0
 TRIPLE_EMA_RSI_MAX = 80.0
 TRIPLE_EMA_BREAKOUT_VOLUME_MULT = 1.5
 TRIPLE_EMA_BREAKOUT_VOLUME_AVG_PERIOD = 20
+# Momentum gate added at the user's request (same reasoning/defaults as
+# Resistance Breakout's): excludes stocks with a weak, just-formed cross
+# where the EMAs are all bunched together on a flat/rolling-over stock
+# (e.g. Aditya Birla Capital) -- close must be up at least this % over
+# the trailing lookback for a ticker to qualify at all.
+TRIPLE_EMA_MOMENTUM_LOOKBACK_DAYS = 10
+TRIPLE_EMA_MIN_MOMENTUM_PCT = 3.0
 
 # Paper-trading / backtest defaults for the same strategy.
 TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital
