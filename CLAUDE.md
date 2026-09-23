@@ -747,6 +747,21 @@ separated known lookalikes (Firstsource 0.30%, Aditya Birla Capital
 13 to 6, while leaving Bullish Alignment/Confirmed Breakout unchanged
 (23/6) -- those tiers' stocks were already spread out enough.
 
+**Long-term trend gate** (added after a third lookalike, Tata Chemicals,
+slipped past both prior gates: +11% over 10 sessions and a healthy 1.5%
+EMA spread, but that was only a bounce off a new low inside a year-long
+downtrend, -32% off its own 252-day high and trading below its own
+SMA200). Neither the momentum gate nor the EMA-spread gate can see a
+stock's *longer-term* context, since both only look at the last few
+weeks. Close must be above `SMA(trend_sma_period)` (default 200) -- the
+same "is this a primary uptrend" check `trend_consolidation.py` already
+uses for its own Nifty 50 benchmark gate -- checked right after the RSI
+range check in `evaluate_ticker`. Verified against real data: Tata
+Chemicals and Patanjali Foods (also below its own SMA200 despite +20%
+over 10 sessions) are both now correctly excluded, while known good
+matches (Gabriel India, IKS) stayed comfortably above their own SMA200;
+tightened Nifty 500 Golden Cross Formed from 6 to 4.
+
 **Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks",
 mandatory `config.TRIPLE_EMA_MIN_PRICE_INR` (₹100) floor shown as a
 caption (not a slider, matching the other adjustable strategies' own
@@ -756,9 +771,11 @@ sorted(params.items()))`), not logged to `scan_history`.
 
 **Results tables**: three tabs (Golden Cross Formed / Bullish Alignment
 / Confirmed Breakout), each with Symbol, Company Name, Setup Status,
-Signal Date, Current Price, EMA Fast/Mid/Slow, EMA Spread %, Golden
-Cross Date, Days Since Cross, Momentum %, RSI, Volume Ratio. Selecting
-a row sets a page-local
+Signal Date, Current Price, EMA Fast/Mid/Slow, EMA Spread %, Trend SMA,
+Golden Cross Date, Days Since Cross, Momentum %, RSI, Volume Ratio (the
+row dict's key is the static `"Trend SMA"`, not an f-string interpolating
+the adjustable period, so the displayed column never goes missing when
+a user changes that slider). Selecting a row sets a page-local
 `st.session_state.teg_selected_ticker` (like `rc_selected_ticker`/
 `rbo_selected_ticker`) and loads
 `triple_ema_golden_cross.build_golden_cross_chart()`: a 3-row Plotly

@@ -170,6 +170,15 @@ TRIPLE_EMA_MIN_MOMENTUM_PCT = 3.0
 # robust, direct measure of "has this actually fanned out, not just
 # barely crossed": EMA-fast must sit at least this % above EMA-slow.
 TRIPLE_EMA_MIN_SPREAD_PCT = 0.5
+# Neither the momentum gate nor the EMA-spread gate can see a stock's
+# longer-term trend context -- Tata Chemicals showed +11% over 10
+# sessions and a healthy 1.5% EMA spread, but that was just a bounce off
+# a new low inside a year-long downtrend (close well below its own
+# SMA200, -32% off its 252-day high). Requiring close > SMA(trend_sma_
+# period) is the standard "is this a primary uptrend" check -- the same
+# kind of condition Trend + Consolidation already uses for its Nifty 50
+# benchmark gate (stock/index close > its own SMA200).
+TRIPLE_EMA_TREND_SMA_PERIOD = 200
 
 # Paper-trading / backtest defaults for the same strategy.
 TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital

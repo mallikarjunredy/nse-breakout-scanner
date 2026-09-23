@@ -47,6 +47,19 @@ be fooled by a noisy reference point; EMA-fast must sit at least
 history. Verified against real data: 0.5% cleanly separates known
 lookalikes (Firstsource 0.30%, Aditya Birla Capital 0.07%, KIMS 0.42%)
 from genuine matches (Gabriel India 0.57%, IKS 1.78%).
+
+Long-term trend gate (added after a third lookalike -- Tata Chemicals --
+slipped past both prior gates: +11% over 10 sessions and a healthy 1.5%
+EMA spread, but that was only a bounce off a new low inside a year-long
+downtrend, -32% off its own 252-day high and trading below its own
+SMA200). Neither the momentum gate nor the EMA-spread gate can see a
+stock's *longer-term* trend context, since both only look at the last
+few weeks. Close must be above SMA(`trend_sma_period`, default 200) --
+the same "is this a primary uptrend" check Trend + Consolidation already
+uses for its own Nifty 50 benchmark gate. Verified against real data:
+Patanjali Foods was also trading below its own SMA200 despite similarly
+strong short-term numbers (+20% over 10 sessions) and was caught by the
+same gate.
 """
 
 import pandas as pd
@@ -76,6 +89,7 @@ def default_params() -> dict:
         "momentum_lookback_days": config.TRIPLE_EMA_MOMENTUM_LOOKBACK_DAYS,
         "min_momentum_pct": config.TRIPLE_EMA_MIN_MOMENTUM_PCT,
         "min_spread_pct": config.TRIPLE_EMA_MIN_SPREAD_PCT,
+        "trend_sma_period": config.TRIPLE_EMA_TREND_SMA_PERIOD,
     }
 
 
@@ -100,7 +114,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     """
     n = len(df)
     min_required = (
-        params["ema_slow"] + params["golden_cross_lookback_days"]
+        max(params["ema_slow"], params["trend_sma_period"]) + params["golden_cross_lookback_days"]
         + params["breakout_volume_avg_period"] + 10
     )
     if n < min_required:
@@ -116,6 +130,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     ema_mid = indicators.compute_ema(close, params["ema_mid"])
     ema_slow = indicators.compute_ema(close, params["ema_slow"])
     rsi = indicators.compute_rsi(close)
+    trend_sma = indicators.compute_sma(close, params["trend_sma_period"])
 
     ema_fast_now = float(ema_fast.iloc[today_idx])
     ema_mid_now = float(ema_mid.iloc[today_idx])
@@ -124,6 +139,18 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     if rsi_now is None:
         return None
     if not (params["rsi_min"] <= rsi_now <= params["rsi_max"]):
+        return None
+
+    # Long-term trend gate: neither the momentum gate nor the EMA-spread
+    # gate can see a stock's longer-term trend context -- a stock can
+    # show strong recent momentum and a healthy EMA spread purely from
+    # bouncing off a new low inside a year-long downtrend (e.g. Tata
+    # Chemicals: +11% over 10 sessions, but trading well below its own
+    # SMA200 after a slide from its 252-day high). Close must be above
+    # SMA(trend_sma_period) -- the same "is this a primary uptrend" check
+    # Trend + Consolidation already uses for its Nifty 50 benchmark gate.
+    trend_sma_now = float(trend_sma.iloc[today_idx]) if pd.notna(trend_sma.iloc[today_idx]) else None
+    if trend_sma_now is None or price_today <= trend_sma_now:
         return None
 
     # A live golden cross: fast is currently above slow, and that
@@ -191,6 +218,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         status = "Golden Cross Formed"
 
     why = [
+        f"✓ Primary uptrend: close (₹{price_today:.2f}) is above its SMA{params['trend_sma_period']} "
+        f"(₹{trend_sma_now:.2f})",
         f"✓ Golden Cross: EMA{params['ema_fast']} crossed above EMA{params['ema_slow']} on "
         f"{cross_date} ({cross_age_days} sessions ago), still holding above it",
         f"✓ Fanned out, not tangled: EMA{params['ema_fast']} is {spread_pct:.2f}% above EMA{params['ema_slow']}",
@@ -223,6 +252,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "EMA Mid": round(ema_mid_now, 2),
         "EMA Slow": round(ema_slow_now, 2),
         "EMA Spread %": round(spread_pct, 2),
+        "Trend SMA": round(trend_sma_now, 2),
         "Golden Cross Date": cross_date,
         "Days Since Cross": cross_age_days,
         "Momentum %": round(momentum_pct, 2),
@@ -237,8 +267,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
 _STATUS_ORDER = {"Confirmed Breakout": 0, "Bullish Alignment": 1, "Golden Cross Formed": 2}
 _DISPLAY_COLUMNS = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "EMA Fast", "EMA Mid", "EMA Slow", "EMA Spread %", "Golden Cross Date", "Days Since Cross", "Momentum %",
-    "RSI", "Volume Ratio", "Why Qualified",
+    "EMA Fast", "EMA Mid", "EMA Slow", "EMA Spread %", "Trend SMA", "Golden Cross Date", "Days Since Cross",
+    "Momentum %", "RSI", "Volume Ratio", "Why Qualified",
 ]
 
 
