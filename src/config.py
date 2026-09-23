@@ -136,6 +136,21 @@ RESISTANCE_BREAKOUT_BREAKOUT_MIN_PCT = 0.5  # close must clear resistance by at 
 RESISTANCE_BREAKOUT_VOLUME_MULT = 1.5
 RESISTANCE_BREAKOUT_VOLUME_AVG_PERIOD = 20
 
+# "Triple EMA Golden Cross" -- see src/triple_ema_golden_cross.py.
+# Adjustable defaults, like Rising Channel / Trend + Consolidation /
+# Resistance Breakout: this pattern came from a visual description, not
+# a numbered spec, so its exact periods/thresholds are tunable defaults.
+TRIPLE_EMA_MIN_PRICE_INR = 100.0
+TRIPLE_EMA_FAST = 10
+TRIPLE_EMA_MID = 20
+TRIPLE_EMA_SLOW = 50
+TRIPLE_EMA_GOLDEN_CROSS_LOOKBACK_DAYS = 90  # how far back to look for the fast-crosses-above-slow event
+TRIPLE_EMA_RISING_LOOKBACK_DAYS = 5  # sessions back, for the "each EMA is rising" check
+TRIPLE_EMA_RSI_MIN = 45.0
+TRIPLE_EMA_RSI_MAX = 80.0
+TRIPLE_EMA_BREAKOUT_VOLUME_MULT = 1.5
+TRIPLE_EMA_BREAKOUT_VOLUME_AVG_PERIOD = 20
+
 # Paper-trading / backtest defaults for the same strategy.
 TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital
 TREND_CONSOL_BACKTEST_RISK_PCT = 0.5  # % of current equity risked per trade

@@ -17,7 +17,7 @@ from streamlit_autorefresh import st_autorefresh
 
 from src import (
     bullish_recovery, config, deep_dive, detail, indicators, market_overview, pre_breakout, resistance_breakout,
-    rising_channel, scan_history, scanner, trend_consolidation, watchlist,
+    rising_channel, scan_history, scanner, trend_consolidation, triple_ema_golden_cross, watchlist,
 )
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
@@ -153,6 +153,10 @@ if "resistance_breakout_cache" not in st.session_state:
     st.session_state.resistance_breakout_cache = {}  # keyed by (universe_name, sorted(params.items()))
 if "rbo_selected_ticker" not in st.session_state:
     st.session_state.rbo_selected_ticker = None
+if "triple_ema_cache" not in st.session_state:
+    st.session_state.triple_ema_cache = {}  # keyed by (universe_name, sorted(params.items()))
+if "teg_selected_ticker" not in st.session_state:
+    st.session_state.teg_selected_ticker = None
 if "watchlist_cache" not in st.session_state:
     st.session_state.watchlist_cache = {}
 if "selected_ticker" not in st.session_state:
@@ -281,8 +285,8 @@ _NAV_ITEMS = [
     ("Home", "🏠"), ("Upside Buy Movement", "🎯"), ("Upside Buy Movement above 100", "💹"),
     ("Daily Rising Channel", "📐"), ("Daily Trend + Consolidation", "🧭"),
     ("Trend + Consolidation Backtest", "🧪"), ("Bullish Recovery Above EMAs", "🌅"),
-    ("Resistance Breakout", "⛰️"), ("Watchlist", "⭐"), ("Stock Analysis", "📈"),
-    ("Scan History", "🕐"), ("Help & Support", "❓"),
+    ("Resistance Breakout", "⛰️"), ("Triple EMA Golden Cross", "🥇"),
+    ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
 ]
 
 with st.sidebar:
@@ -2531,6 +2535,192 @@ if nav_page == "Resistance Breakout":
         "recommendations, and not a claim that any stock will keep moving in this direction."
     )
     render_footer(scan_ts=rbo_scan_time)
+
+
+# ---------------------------------------------------------------------------
+# Page: Triple EMA Golden Cross
+# ---------------------------------------------------------------------------
+
+_TEG_COLUMN_ORDER = [
+    "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
+    "EMA Fast", "EMA Mid", "EMA Slow", "Golden Cross Date", "Days Since Cross", "RSI", "Volume Ratio",
+]
+_TEG_COLUMN_CONFIG = {
+    "Rank": st.column_config.NumberColumn("Rank", width="small"),
+    "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+    "Company Name": st.column_config.TextColumn("Company Name"),
+    "Setup Status": st.column_config.TextColumn("Status", width="small"),
+    "Signal Date": st.column_config.TextColumn("Signal Date", width="small"),
+    "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
+    "EMA Fast": st.column_config.NumberColumn("EMA Fast", format="₹%.2f"),
+    "EMA Mid": st.column_config.NumberColumn("EMA Mid", format="₹%.2f"),
+    "EMA Slow": st.column_config.NumberColumn("EMA Slow", format="₹%.2f"),
+    "Golden Cross Date": st.column_config.TextColumn("Cross Date", width="small"),
+    "Days Since Cross": st.column_config.NumberColumn("Days Since Cross"),
+    "RSI": st.column_config.NumberColumn("RSI14", format="%.1f"),
+    "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+}
+
+
+def _render_teg_tab(df: pd.DataFrame, key_prefix: str):
+    if df.empty:
+        st.info("No stocks matched your saved strategy in this scan.")
+        return
+    _export_buttons(df, key_prefix, key_prefix)
+    event = st.dataframe(
+        df, hide_index=True, width="stretch", column_config=_TEG_COLUMN_CONFIG,
+        column_order=[c for c in _TEG_COLUMN_ORDER if c in df.columns],
+        on_select="rerun", selection_mode="single-row", key=f"{key_prefix}_table",
+    )
+    rows = event["selection"]["rows"]
+    if rows:
+        st.session_state.teg_selected_ticker = df.iloc[rows[0]]["Ticker"]
+
+
+if nav_page == "Triple EMA Golden Cross":
+    st.markdown("### 🥇 Triple EMA Golden Cross")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "Three EMAs (fast/mid/slow) that start tangled together through a consolidation, then the fast EMA "
+        "crosses above the slow EMA (a golden cross) and the three fan out into full bullish order -- "
+        "Close > EMA-fast > EMA-mid > EMA-slow, all rising -- with RSI in a healthy range. A volume spike "
+        "on top of that full alignment is a Confirmed Breakout; the same alignment without one is still "
+        "building. Rule-based scanner matches, not guaranteed profitable recommendations."
+    )
+
+    teg_universe_choice = st.radio(
+        "Universe", ["Nifty 500", "All Stocks"], horizontal=True, key="teg_universe",
+    )
+    teg_universe_name = "nifty500" if teg_universe_choice == "Nifty 500" else "all_nse"
+    st.caption(f"✅ Mandatory: closing price > ₹{config.TRIPLE_EMA_MIN_PRICE_INR:.0f}.")
+
+    with st.expander("⚙️ Adjust Thresholds"):
+        te1, te2, te3 = st.columns(3)
+        teg_ema_fast = te1.slider("EMA Fast Period", 3, 20, config.TRIPLE_EMA_FAST, 1, key="teg_ema_fast")
+        teg_ema_mid = te2.slider("EMA Mid Period", 10, 40, config.TRIPLE_EMA_MID, 1, key="teg_ema_mid")
+        teg_ema_slow = te3.slider("EMA Slow Period", 30, 100, config.TRIPLE_EMA_SLOW, 5, key="teg_ema_slow")
+        te4, te5, te6 = st.columns(3)
+        teg_cross_lookback = te4.slider(
+            "Golden Cross Lookback (sessions)", 20, 200, config.TRIPLE_EMA_GOLDEN_CROSS_LOOKBACK_DAYS, 10,
+            key="teg_cross_lookback", help="How far back to search for the fast-EMA-crosses-above-slow-EMA event.",
+        )
+        teg_rsi = te5.slider(
+            "RSI Healthy Range", 0, 100,
+            (int(config.TRIPLE_EMA_RSI_MIN), int(config.TRIPLE_EMA_RSI_MAX)), key="teg_rsi",
+        )
+        teg_vol_mult = te6.slider(
+            "Breakout Volume Multiplier", 1.0, 4.0, config.TRIPLE_EMA_BREAKOUT_VOLUME_MULT, 0.1, key="teg_vol_mult",
+        )
+        if not (teg_ema_fast < teg_ema_mid < teg_ema_slow):
+            st.warning("⚠️ EMA periods should be Fast < Mid < Slow for this pattern to make sense.")
+
+    teg_params = triple_ema_golden_cross.default_params()
+    teg_params.update({
+        "ema_fast": teg_ema_fast,
+        "ema_mid": teg_ema_mid,
+        "ema_slow": teg_ema_slow,
+        "golden_cross_lookback_days": teg_cross_lookback,
+        "rsi_min": float(teg_rsi[0]),
+        "rsi_max": float(teg_rsi[1]),
+        "breakout_volume_mult": teg_vol_mult,
+    })
+    teg_cache_key = (teg_universe_name, tuple(sorted(teg_params.items())))
+
+    teg_cache = st.session_state.triple_ema_cache.get(teg_cache_key)
+    run_teg_clicked = st.button("▶️ Run Triple EMA Golden Cross Scan", type="primary", key="run_triple_ema")
+
+    if run_teg_clicked or teg_cache is None:
+        teg_progress = st.progress(0, text="Starting scan...")
+
+        def _on_teg_progress(frac, text_):
+            teg_progress.progress(min(frac, 1.0), text=text_)
+
+        try:
+            with st.spinner(f"Scanning {teg_universe_choice} for Triple EMA Golden Cross setups..."):
+                result_teg = triple_ema_golden_cross.scan_triple_ema_golden_cross(
+                    universe_name=teg_universe_name, min_price=config.TRIPLE_EMA_MIN_PRICE_INR,
+                    params=teg_params, progress_callback=_on_teg_progress,
+                )
+            teg_progress.empty()
+            st.session_state.triple_ema_cache[teg_cache_key] = (time.time(), result_teg)
+        except Exception as exc:
+            teg_progress.empty()
+            st.error(f"Scan failed: {exc}. This is usually a temporary Yahoo Finance or network issue -- try again.")
+            result_teg = None
+    else:
+        result_teg = teg_cache[1]
+
+    if result_teg is None:
+        st.stop()
+
+    teg_scan_time = st.session_state.triple_ema_cache[teg_cache_key][0]
+    teg_scan_label = datetime.datetime.fromtimestamp(teg_scan_time, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
+    teg_asof = result_teg.get("data_asof_date")
+    teg_asof_label = teg_asof.strftime("%d %b %Y") if teg_asof else "N/A"
+    st.caption(
+        f"Last scanned: {teg_scan_label} · Prices as of {teg_asof_label} close · "
+        f"Universe: {result_teg['universe_label']} ({result_teg['universe_size']} instruments) · "
+        f"Scanned OK: {result_teg['scanned']}"
+    )
+    teg_next_refresh_in = config.SCAN_CACHE_TTL_SECONDS - (time.time() - teg_scan_time)
+    if teg_next_refresh_in <= 0:
+        st.caption("⏳ This data may be stale -- use ▶️ Run Triple EMA Golden Cross Scan for the latest.")
+
+    cross_df_teg = result_teg["golden_cross"]
+    aligned_df_teg = result_teg["bullish_alignment"]
+    confirmed_df_teg = result_teg["confirmed_breakout"]
+
+    tab_cross_teg, tab_aligned_teg, tab_confirmed_teg = st.tabs([
+        f"➕ Golden Cross Formed ({len(cross_df_teg)})",
+        f"📶 Bullish Alignment ({len(aligned_df_teg)})",
+        f"🚀 Confirmed Breakout ({len(confirmed_df_teg)})",
+    ])
+    with tab_cross_teg:
+        st.caption("The fast EMA has crossed above the slow EMA and is still holding, but not fully stacked yet.")
+        _render_teg_tab(cross_df_teg, "teg_cross")
+    with tab_aligned_teg:
+        st.caption("Fully stacked (Close > EMA-fast > EMA-mid > EMA-slow, all rising) and RSI is healthy -- still building volume.")
+        _render_teg_tab(aligned_df_teg, "teg_aligned")
+    with tab_confirmed_teg:
+        st.caption("Fully stacked, RSI healthy, and today's volume confirms the move.")
+        _render_teg_tab(confirmed_df_teg, "teg_confirmed")
+
+    st.divider()
+    st.markdown("#### 📊 Selected Candidate Chart")
+    teg_ticker = st.session_state.teg_selected_ticker
+    if not teg_ticker:
+        st.caption("👆 Click a row in any table above to see its chart here.")
+    else:
+        teg_cross_idx = result_teg["cross_idx"].get(teg_ticker)
+        teg_sig_idx = result_teg["signal_idx"].get(teg_ticker)
+        teg_combined = pd.concat([cross_df_teg, aligned_df_teg, confirmed_df_teg], ignore_index=True)
+        teg_match = teg_combined[teg_combined["Ticker"] == teg_ticker]
+        if teg_cross_idx is None or teg_sig_idx is None or teg_match.empty:
+            st.caption(f"No data for {teg_ticker} under the current scan -- select a row above again.")
+        else:
+            teg_row = teg_match.iloc[0]
+            with st.spinner(f"Loading chart for {teg_ticker}..."):
+                teg_chart_history = scanner.download_history([teg_ticker])
+            teg_chart_df = teg_chart_history.get(teg_ticker)
+            if teg_chart_df is None:
+                st.caption("Price history unavailable for this ticker right now.")
+            else:
+                teg_fig = triple_ema_golden_cross.build_golden_cross_chart(
+                    teg_chart_df, teg_cross_idx, teg_sig_idx, teg_params, teg_ticker,
+                )
+                st.plotly_chart(teg_fig, width="stretch")
+                st.caption(
+                    "Green = EMA Fast, Red = EMA Mid, Blue = EMA Slow. Cyan ✚ = the golden-cross candle. "
+                    "The signal day's Volume bar is highlighted orange."
+                )
+                st.markdown(f"**Why qualified:**\n\n{teg_row['Why Qualified']}")
+
+    st.caption(
+        "The EMA structure, golden cross, RSI range, and volume confirmation are rule-based checks against "
+        "this strategy's own adjustable thresholds -- not guaranteed profitable recommendations, and not a "
+        "claim that any stock will keep moving in this direction."
+    )
+    render_footer(scan_ts=teg_scan_time)
 
 
 # ---------------------------------------------------------------------------

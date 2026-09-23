@@ -668,6 +668,59 @@ high and pullback low / Volume, with the signal day's bar highlighted
 orange) so "visibly higher volume" is literally visible at a glance --
 plus the row's own "Why Qualified" string underneath.
 
+## Seventh strategy: "Triple EMA Golden Cross"
+
+`src/triple_ema_golden_cross.py`, page "🥇 Triple EMA Golden Cross" --
+built from a chart screenshot (three EMAs tangled through a
+consolidation, a golden-cross event, then fanning out into bullish
+order with rising RSI and a volume spike), not a numbered spec, so the
+user left both the name and the status categories to be designed. Like
+Resistance Breakout, this is **adjustable from the UI** (see
+`default_params()` / config.py's `TRIPLE_EMA_*` defaults) since the
+exact EMA periods and thresholds are reasonable defaults, not a fixed
+rule the user specified.
+
+**Three EMAs** (fast/mid/slow, default 10/20/50) on Close, and a
+**golden cross**: `_find_golden_cross` scans the trailing
+`golden_cross_lookback_days` (default 90) window for the most recent
+session where EMA-fast crossed from at/below to strictly above EMA-slow.
+A ticker only qualifies if that cross is still "live" -- EMA-fast is
+still above EMA-slow today (a reversed/failed cross, i.e. a later death
+cross, disqualifies it entirely, same as no cross at all) -- and RSI(14)
+sits within `rsi_min`/`rsi_max` (default 45-80).
+
+**Three mutually-exclusive statuses**, matching the chart's stages left
+to right:
+
+- **Golden Cross Formed**: a live cross exists, but the EMAs aren't yet
+  fully stacked in bullish order -- still tangled/converging.
+- **Bullish Alignment**: fully stacked (Close > EMA-fast > EMA-mid >
+  EMA-slow, all three rising vs. `ema_rising_lookback_days` (5) sessions
+  ago) and RSI healthy, but today's volume hasn't confirmed the move.
+- **Confirmed Breakout**: the same full alignment, plus today's volume
+  is ≥ `breakout_volume_mult` (default 1.5x) times the preceding
+  `breakout_volume_avg_period` (20) -session average.
+
+**Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks",
+mandatory `config.TRIPLE_EMA_MIN_PRICE_INR` (₹100) floor shown as a
+caption (not a slider, matching the other adjustable strategies' own
+price-floor treatment). Own cache
+(`st.session_state.triple_ema_cache`, keyed by `(universe_name,
+sorted(params.items()))`), not logged to `scan_history`.
+
+**Results tables**: three tabs (Golden Cross Formed / Bullish Alignment
+/ Confirmed Breakout), each with Symbol, Company Name, Setup Status,
+Signal Date, Current Price, EMA Fast/Mid/Slow, Golden Cross Date, Days
+Since Cross, RSI, Volume Ratio. Selecting a row sets a page-local
+`st.session_state.teg_selected_ticker` (like `rc_selected_ticker`/
+`rbo_selected_ticker`) and loads
+`triple_ema_golden_cross.build_golden_cross_chart()`: a 3-row Plotly
+subplot (price + green/red/blue EMA-fast/mid/slow lines + a cyan ✚
+marker at the golden-cross candle / Volume with the signal day
+highlighted orange / RSI(14) with the strategy's own healthy-range band
+shaded) -- deliberately the same green/red/blue EMA color convention as
+the source chart -- plus the row's own "Why Qualified" string underneath.
+
 ## Home page layout: terminal-style split
 
 Top to bottom:
