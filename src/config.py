@@ -163,6 +163,13 @@ TRIPLE_EMA_BREAKOUT_VOLUME_AVG_PERIOD = 20
 # the trailing lookback for a ticker to qualify at all.
 TRIPLE_EMA_MOMENTUM_LOOKBACK_DAYS = 10
 TRIPLE_EMA_MIN_MOMENTUM_PCT = 3.0
+# A single-window rate-of-change can still be fooled by a noisy reference
+# point (e.g. Firstsource Solutions: +5% over 10 sessions purely from
+# where that window happened to start, while its 5- and 20-session
+# momentum were both negative). This EMA-spread requirement is the more
+# robust, direct measure of "has this actually fanned out, not just
+# barely crossed": EMA-fast must sit at least this % above EMA-slow.
+TRIPLE_EMA_MIN_SPREAD_PCT = 0.5
 
 # Paper-trading / backtest defaults for the same strategy.
 TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital

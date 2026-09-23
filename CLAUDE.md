@@ -731,6 +731,22 @@ Formed / Bullish Alignment / Confirmed Breakout), correctly excluded
 Aditya Birla Capital entirely, and every remaining match showed clear
 positive momentum (3-24%).
 
+**EMA-spread gate** (added after a second lookalike, Firstsource
+Solutions, slipped past the momentum gate: its 10-session momentum
+happened to read +5% purely from where that window started, while its
+5- and 20-session momentum were both negative and its EMAs sat within
+0.3% of each other -- a single-window rate-of-change can be fooled by a
+noisy reference point). EMA-fast must sit at least `min_spread_pct`
+(default 0.5%) above EMA-slow -- a direct, point-in-time measure of
+"has this actually fanned out," checked right after the
+`ema_fast_now <= ema_slow_now` check in `evaluate_ticker`, independent
+of any price-history window. Verified against real data: 0.5% cleanly
+separated known lookalikes (Firstsource 0.30%, Aditya Birla Capital
+0.07%, KIMS 0.42%) from genuine matches (Gabriel India 0.57%, IKS
+1.78%); tightened the Nifty 500 Golden Cross Formed count further, from
+13 to 6, while leaving Bullish Alignment/Confirmed Breakout unchanged
+(23/6) -- those tiers' stocks were already spread out enough.
+
 **Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks",
 mandatory `config.TRIPLE_EMA_MIN_PRICE_INR` (₹100) floor shown as a
 caption (not a slider, matching the other adjustable strategies' own
@@ -740,8 +756,9 @@ sorted(params.items()))`), not logged to `scan_history`.
 
 **Results tables**: three tabs (Golden Cross Formed / Bullish Alignment
 / Confirmed Breakout), each with Symbol, Company Name, Setup Status,
-Signal Date, Current Price, EMA Fast/Mid/Slow, Golden Cross Date, Days
-Since Cross, Momentum %, RSI, Volume Ratio. Selecting a row sets a page-local
+Signal Date, Current Price, EMA Fast/Mid/Slow, EMA Spread %, Golden
+Cross Date, Days Since Cross, Momentum %, RSI, Volume Ratio. Selecting
+a row sets a page-local
 `st.session_state.teg_selected_ticker` (like `rc_selected_ticker`/
 `rbo_selected_ticker`) and loads
 `triple_ema_golden_cross.build_golden_cross_chart()`: a 3-row Plotly

@@ -34,9 +34,19 @@ sessions): close must be up at least `min_momentum_pct` over the
 trailing `momentum_lookback_days` sessions for a ticker to qualify at
 all, in any of the three statuses. Same rate-of-change design as
 Resistance Breakout's own momentum gate -- it only asks "has this
-actually moved recently," which is enough to separate a fresh,
-genuinely trending cross from a technically-valid-but-meaningless one
-sitting inside a flat tangle.
+actually moved recently."
+
+EMA-spread gate (added after a second lookalike -- Firstsource
+Solutions -- slipped past the momentum gate: its 10-session momentum
+happened to read +5% purely because of where that window started, while
+its 5- and 20-session momentum were both negative and its EMAs were
+bunched within 0.3% of each other). A single-window rate-of-change can
+be fooled by a noisy reference point; EMA-fast must sit at least
+`min_spread_pct` above EMA-slow -- a direct, point-in-time measure of
+"has this actually fanned out" rather than an inference from price
+history. Verified against real data: 0.5% cleanly separates known
+lookalikes (Firstsource 0.30%, Aditya Birla Capital 0.07%, KIMS 0.42%)
+from genuine matches (Gabriel India 0.57%, IKS 1.78%).
 """
 
 import pandas as pd
@@ -65,6 +75,7 @@ def default_params() -> dict:
         "breakout_volume_avg_period": config.TRIPLE_EMA_BREAKOUT_VOLUME_AVG_PERIOD,
         "momentum_lookback_days": config.TRIPLE_EMA_MOMENTUM_LOOKBACK_DAYS,
         "min_momentum_pct": config.TRIPLE_EMA_MIN_MOMENTUM_PCT,
+        "min_spread_pct": config.TRIPLE_EMA_MIN_SPREAD_PCT,
     }
 
 
@@ -121,6 +132,19 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     # event to point to and show on the chart).
     if ema_fast_now <= ema_slow_now:
         return None
+
+    # EMA-spread gate: excludes a technically-live but trivial cross
+    # where the EMAs are all still bunched within a fraction of a
+    # percent of each other (e.g. Firstsource Solutions at 0.3% spread)
+    # -- a more robust, direct measure of "has this actually fanned out"
+    # than a single-window price-momentum snapshot, which a noisy
+    # reference point can fool (Firstsource showed +5% over 10 sessions
+    # purely from where that window happened to start, while its 5- and
+    # 20-session momentum were both negative).
+    spread_pct = (ema_fast_now - ema_slow_now) / ema_slow_now * 100
+    if spread_pct < params["min_spread_pct"]:
+        return None
+
     cross_idx = _find_golden_cross(ema_fast, ema_slow, today_idx, params["golden_cross_lookback_days"])
     if cross_idx is None:
         return None
@@ -169,6 +193,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     why = [
         f"✓ Golden Cross: EMA{params['ema_fast']} crossed above EMA{params['ema_slow']} on "
         f"{cross_date} ({cross_age_days} sessions ago), still holding above it",
+        f"✓ Fanned out, not tangled: EMA{params['ema_fast']} is {spread_pct:.2f}% above EMA{params['ema_slow']}",
         f"✓ Trending, not flat: close is up {momentum_pct:.1f}% over the last {mom_lb} sessions",
         f"✓ RSI {rsi_now:.1f} within the {params['rsi_min']:.0f}-{params['rsi_max']:.0f} healthy range",
     ]
@@ -197,6 +222,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "EMA Fast": round(ema_fast_now, 2),
         "EMA Mid": round(ema_mid_now, 2),
         "EMA Slow": round(ema_slow_now, 2),
+        "EMA Spread %": round(spread_pct, 2),
         "Golden Cross Date": cross_date,
         "Days Since Cross": cross_age_days,
         "Momentum %": round(momentum_pct, 2),
@@ -211,8 +237,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
 _STATUS_ORDER = {"Confirmed Breakout": 0, "Bullish Alignment": 1, "Golden Cross Formed": 2}
 _DISPLAY_COLUMNS = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "EMA Fast", "EMA Mid", "EMA Slow", "Golden Cross Date", "Days Since Cross", "Momentum %", "RSI",
-    "Volume Ratio", "Why Qualified",
+    "EMA Fast", "EMA Mid", "EMA Slow", "EMA Spread %", "Golden Cross Date", "Days Since Cross", "Momentum %",
+    "RSI", "Volume Ratio", "Why Qualified",
 ]
 
 

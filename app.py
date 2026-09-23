@@ -2559,8 +2559,8 @@ if nav_page == "Resistance Breakout":
 
 _TEG_COLUMN_ORDER = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "EMA Fast", "EMA Mid", "EMA Slow", "Golden Cross Date", "Days Since Cross", "Momentum %", "RSI",
-    "Volume Ratio",
+    "EMA Fast", "EMA Mid", "EMA Slow", "EMA Spread %", "Golden Cross Date", "Days Since Cross", "Momentum %",
+    "RSI", "Volume Ratio",
 ]
 _TEG_COLUMN_CONFIG = {
     "Rank": st.column_config.NumberColumn("Rank", width="small"),
@@ -2572,6 +2572,7 @@ _TEG_COLUMN_CONFIG = {
     "EMA Fast": st.column_config.NumberColumn("EMA Fast", format="₹%.2f"),
     "EMA Mid": st.column_config.NumberColumn("EMA Mid", format="₹%.2f"),
     "EMA Slow": st.column_config.NumberColumn("EMA Slow", format="₹%.2f"),
+    "EMA Spread %": st.column_config.NumberColumn("EMA Spread %", format="%.2f%%"),
     "Golden Cross Date": st.column_config.TextColumn("Cross Date", width="small"),
     "Days Since Cross": st.column_config.NumberColumn("Days Since Cross"),
     "Momentum %": st.column_config.NumberColumn("Momentum %", format="%+.1f%%"),
@@ -2642,6 +2643,12 @@ if nav_page == "Triple EMA Golden Cross":
             help="Close must be up at least this % over the momentum lookback -- excludes a weak, "
                  "just-formed cross where the EMAs are bunched together on a flat/rolling-over stock.",
         )
+        teg_min_spread = st.slider(
+            "Min. EMA Spread (%)", 0.0, 3.0, config.TRIPLE_EMA_MIN_SPREAD_PCT, 0.1,
+            key="teg_min_spread",
+            help="EMA-fast must sit at least this % above EMA-slow -- a more robust check than momentum "
+                 "alone that the EMAs have actually fanned out, not just barely crossed while still tangled.",
+        )
         if not (teg_ema_fast < teg_ema_mid < teg_ema_slow):
             st.warning("⚠️ EMA periods should be Fast < Mid < Slow for this pattern to make sense.")
 
@@ -2656,6 +2663,7 @@ if nav_page == "Triple EMA Golden Cross":
         "breakout_volume_mult": teg_vol_mult,
         "momentum_lookback_days": teg_momentum_lookback,
         "min_momentum_pct": teg_min_momentum,
+        "min_spread_pct": teg_min_spread,
     })
     teg_cache_key = (teg_universe_name, tuple(sorted(teg_params.items())))
 
