@@ -762,6 +762,32 @@ over 10 sessions) are both now correctly excluded, while known good
 matches (Gabriel India, IKS) stayed comfortably above their own SMA200;
 tightened Nifty 500 Golden Cross Formed from 6 to 4.
 
+**Channel gate** (added at the user's request, given a reference chart
+of a clean, upward-sloping parallel channel with price hugging the top
+edge -- "only ready to breakout as attached stocks only"). None of the
+prior gates actually require that contained-channel structure, only
+that a stock isn't an obvious lookalike. Reuses
+`rising_channel.select_best_channel()` as-is -- the exact same channel-
+fitting engine the Daily Rising Channel strategy uses, not reimplemented
+-- run as of today; a valid channel must exist, and today's close must
+sit within `channel_distance_min/max_pct` (default 0-5%) below that
+channel's own projected resistance. This is by far the most expensive
+check in the whole evaluation (a windowed least-squares search), so it
+runs last in `evaluate_ticker`, after every cheaper gate above, on
+whatever small population survives them (typically a few dozen tickers
+out of 500, not the whole universe) -- verified this keeps a full Nifty
+500 scan to ~23 seconds. Only the distance-to-resistance band is a
+Triple-EMA-specific setting; the channel-fit internals (touch tolerance,
+parallelism, containment, lookback search range) use Rising Channel's
+own defaults from `rising_channel.default_params()`, already tunable on
+that dedicated page rather than duplicated here. Verified against real
+data: tightened a full Nifty 500 scan to just 3 matches, all in Bullish
+Alignment, all within 4.1-4.7% of a valid channel's resistance with
+strong EMA spread (2-12%) and momentum (4-8.5%) -- day-to-day match
+counts of zero or a handful are expected given how high this bar now
+is, the same "strict conditions -> few matches is normal" pattern
+already documented for Upside Buy Movement.
+
 **Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks",
 mandatory `config.TRIPLE_EMA_MIN_PRICE_INR` (₹100) floor shown as a
 caption (not a slider, matching the other adjustable strategies' own
@@ -772,15 +798,20 @@ sorted(params.items()))`), not logged to `scan_history`.
 **Results tables**: three tabs (Golden Cross Formed / Bullish Alignment
 / Confirmed Breakout), each with Symbol, Company Name, Setup Status,
 Signal Date, Current Price, EMA Fast/Mid/Slow, EMA Spread %, Trend SMA,
-Golden Cross Date, Days Since Cross, Momentum %, RSI, Volume Ratio (the
-row dict's key is the static `"Trend SMA"`, not an f-string interpolating
-the adjustable period, so the displayed column never goes missing when
-a user changes that slider). Selecting a row sets a page-local
+Channel Resistance, Channel Distance %, Golden Cross Date, Days Since
+Cross, Momentum %, RSI, Volume Ratio (the row dict's key is the static
+`"Trend SMA"`, not an f-string interpolating the adjustable period, so
+the displayed column never goes missing when a user changes that
+slider). Selecting a row sets a page-local
 `st.session_state.teg_selected_ticker` (like `rc_selected_ticker`/
 `rbo_selected_ticker`) and loads
 `triple_ema_golden_cross.build_golden_cross_chart()`: a 3-row Plotly
 subplot (price + green/red/blue EMA-fast/mid/slow lines + a cyan ✚
-marker at the golden-cross candle / Volume with the signal day
+marker at the golden-cross candle + -- when the channel gate matched --
+the same sloped resistance/support lines and ▽/△ swing-point markers
+`rising_channel.build_channel_chart` draws, passed in via a new
+`channel` dict argument and the scan result's `channels` dict (keyed by
+ticker, mirroring `cross_idx`/`signal_idx`) / Volume with the signal day
 highlighted orange / RSI(14) with the strategy's own healthy-range band
 shaded) -- deliberately the same green/red/blue EMA color convention as
 the source chart -- plus the row's own "Why Qualified" string underneath.

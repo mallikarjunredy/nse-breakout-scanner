@@ -179,6 +179,20 @@ TRIPLE_EMA_MIN_SPREAD_PCT = 0.5
 # kind of condition Trend + Consolidation already uses for its Nifty 50
 # benchmark gate (stock/index close > its own SMA200).
 TRIPLE_EMA_TREND_SMA_PERIOD = 200
+# Channel gate, added at the user's request: the earlier gates (momentum,
+# EMA spread, long-term trend) only rule out obvious lookalikes -- they
+# never actually require the clean, contained, rising-channel structure
+# the user's reference chart shows (parallel upward-sloping trend lines,
+# candles staying inside the band, price now hugging the top edge, ready
+# to break out). Reuses rising_channel.select_best_channel() as-is (the
+# same channel-fitting engine the Daily Rising Channel strategy already
+# uses) rather than re-implementing channel detection a second time.
+# Only the "how close to the channel's top edge" band is exposed as a
+# Triple EMA Golden Cross-specific setting; the channel-fit internals
+# (touch tolerance, parallelism, containment, lookback search range) use
+# Rising Channel's own defaults, already tunable on that dedicated page.
+TRIPLE_EMA_CHANNEL_DISTANCE_MIN_PCT = 0.0
+TRIPLE_EMA_CHANNEL_DISTANCE_MAX_PCT = 5.0
 
 # Paper-trading / backtest defaults for the same strategy.
 TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital

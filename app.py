@@ -2559,8 +2559,8 @@ if nav_page == "Resistance Breakout":
 
 _TEG_COLUMN_ORDER = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "EMA Fast", "EMA Mid", "EMA Slow", "EMA Spread %", "Trend SMA", "Golden Cross Date", "Days Since Cross",
-    "Momentum %", "RSI", "Volume Ratio",
+    "EMA Fast", "EMA Mid", "EMA Slow", "EMA Spread %", "Trend SMA", "Channel Resistance", "Channel Distance %",
+    "Golden Cross Date", "Days Since Cross", "Momentum %", "RSI", "Volume Ratio",
 ]
 _TEG_COLUMN_CONFIG = {
     "Rank": st.column_config.NumberColumn("Rank", width="small"),
@@ -2574,6 +2574,8 @@ _TEG_COLUMN_CONFIG = {
     "EMA Slow": st.column_config.NumberColumn("EMA Slow", format="₹%.2f"),
     "EMA Spread %": st.column_config.NumberColumn("EMA Spread %", format="%.2f%%"),
     "Trend SMA": st.column_config.NumberColumn("Trend SMA", format="₹%.2f"),
+    "Channel Resistance": st.column_config.NumberColumn("Channel Resistance", format="₹%.2f"),
+    "Channel Distance %": st.column_config.NumberColumn("Channel Distance %", format="%.2f%%"),
     "Golden Cross Date": st.column_config.TextColumn("Cross Date", width="small"),
     "Days Since Cross": st.column_config.NumberColumn("Days Since Cross"),
     "Momentum %": st.column_config.NumberColumn("Momentum %", format="%+.1f%%"),
@@ -2606,8 +2608,10 @@ if nav_page == "Triple EMA Golden Cross":
         "Close > EMA-fast > EMA-mid > EMA-slow, all rising -- with RSI in a healthy range. A volume spike "
         "on top of that full alignment is a Confirmed Breakout; the same alignment without one is still "
         "building. Momentum, EMA-spread, and long-term-trend gates together exclude weak, just-formed "
-        "crosses -- flat/tangled stocks, and stocks merely bouncing inside a longer-term downtrend. "
-        "Rule-based scanner matches, not guaranteed profitable recommendations."
+        "crosses -- flat/tangled stocks, and stocks merely bouncing inside a longer-term downtrend. A "
+        "channel gate additionally requires a valid, contained rising channel (reusing Daily Rising "
+        "Channel's own detection) with today's close near its top edge -- ready to break out, not just a "
+        "loose uptrend. Rule-based scanner matches, not guaranteed profitable recommendations."
     )
 
     teg_universe_choice = st.radio(
@@ -2656,6 +2660,14 @@ if nav_page == "Triple EMA Golden Cross":
             help="Close must be above this long-term SMA -- excludes stocks whose recent bounce is happening "
                  "inside a longer-term downtrend (e.g. Tata Chemicals, well below its own SMA200).",
         )
+        teg_channel_distance = st.slider(
+            "Channel Distance to Resistance (%)", 0.0, 15.0,
+            (config.TRIPLE_EMA_CHANNEL_DISTANCE_MIN_PCT, config.TRIPLE_EMA_CHANNEL_DISTANCE_MAX_PCT), 0.5,
+            key="teg_channel_distance",
+            help="Requires a valid rising channel (reusing Daily Rising Channel's own detection) with "
+                 "today's close within this band below its projected resistance -- ready to break out, "
+                 "not just anywhere inside the channel.",
+        )
         if not (teg_ema_fast < teg_ema_mid < teg_ema_slow):
             st.warning("⚠️ EMA periods should be Fast < Mid < Slow for this pattern to make sense.")
 
@@ -2672,6 +2684,8 @@ if nav_page == "Triple EMA Golden Cross":
         "min_momentum_pct": teg_min_momentum,
         "min_spread_pct": teg_min_spread,
         "trend_sma_period": teg_trend_sma,
+        "channel_distance_min_pct": teg_channel_distance[0],
+        "channel_distance_max_pct": teg_channel_distance[1],
     })
     teg_cache_key = (teg_universe_name, tuple(sorted(teg_params.items())))
 
@@ -2754,13 +2768,15 @@ if nav_page == "Triple EMA Golden Cross":
             if teg_chart_df is None:
                 st.caption("Price history unavailable for this ticker right now.")
             else:
+                teg_channel = result_teg["channels"].get(teg_ticker)
                 teg_fig = triple_ema_golden_cross.build_golden_cross_chart(
-                    teg_chart_df, teg_cross_idx, teg_sig_idx, teg_params, teg_ticker,
+                    teg_chart_df, teg_cross_idx, teg_sig_idx, teg_params, teg_ticker, channel=teg_channel,
                 )
                 st.plotly_chart(teg_fig, width="stretch")
                 st.caption(
                     "Green = EMA Fast, Red = EMA Mid, Blue = EMA Slow. Cyan ✚ = the golden-cross candle. "
-                    "The signal day's Volume bar is highlighted orange."
+                    "Solid blue = channel resistance, dotted blue = channel support (▽/△ = the swing points "
+                    "used to fit them). The signal day's Volume bar is highlighted orange."
                 )
                 st.markdown(f"**Why qualified:**\n\n{teg_row['Why Qualified']}")
 

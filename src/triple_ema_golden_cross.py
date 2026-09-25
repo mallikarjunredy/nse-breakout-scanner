@@ -60,11 +60,23 @@ uses for its own Nifty 50 benchmark gate. Verified against real data:
 Patanjali Foods was also trading below its own SMA200 despite similarly
 strong short-term numbers (+20% over 10 sessions) and was caught by the
 same gate.
+
+Channel gate (added at the user's request, given a reference chart of a
+clean, upward-sloping parallel channel with price hugging the top edge,
+"ready to break out"): none of the prior gates actually require that
+contained-channel structure, only that a stock isn't an obvious
+lookalike. `select_best_channel` -- `rising_channel.py`'s own channel-
+fitting engine, reused as-is rather than reimplemented -- must find a
+valid rising channel as of today, and today's close must sit within
+`channel_distance_min/max_pct` (default 0-5%) below that channel's
+projected resistance. This is the single most expensive check in the
+whole evaluation, so it runs last, only for tickers that already survived
+every cheaper gate above (typically a few dozen, not the full universe).
 """
 
 import pandas as pd
 
-from . import config, indicators, scanner, universe
+from . import config, indicators, rising_channel, scanner, universe
 
 _UNIVERSE_LOADERS = {
     "nifty500": (universe.get_nifty_500, "Nifty 500"),
@@ -90,6 +102,8 @@ def default_params() -> dict:
         "min_momentum_pct": config.TRIPLE_EMA_MIN_MOMENTUM_PCT,
         "min_spread_pct": config.TRIPLE_EMA_MIN_SPREAD_PCT,
         "trend_sma_period": config.TRIPLE_EMA_TREND_SMA_PERIOD,
+        "channel_distance_min_pct": config.TRIPLE_EMA_CHANNEL_DISTANCE_MIN_PCT,
+        "channel_distance_max_pct": config.TRIPLE_EMA_CHANNEL_DISTANCE_MAX_PCT,
     }
 
 
@@ -193,6 +207,25 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     if momentum_pct < params["min_momentum_pct"]:
         return None
 
+    # Channel gate: the earlier gates only rule out lookalikes -- they
+    # never require the actual clean, contained, rising-channel structure
+    # the reference chart shows (parallel upward-sloping trend lines,
+    # candles staying inside the band, price now hugging the top edge).
+    # Reuses rising_channel.select_best_channel() as-is (the same engine
+    # the Daily Rising Channel strategy uses), run only for tickers that
+    # already survived every cheaper gate above -- it's the most
+    # expensive check here, so it runs last, on the smallest population.
+    channel_params = rising_channel.default_params()
+    channel = rising_channel.select_best_channel(df, today_idx, channel_params)
+    if channel is None:
+        return None
+    channel_res_now = channel["slope_r"] * today_idx + channel["intercept_r"]
+    if channel_res_now <= 0:
+        return None
+    channel_distance_pct = (channel_res_now - price_today) / channel_res_now * 100
+    if not (params["channel_distance_min_pct"] <= channel_distance_pct <= params["channel_distance_max_pct"]):
+        return None
+
     rising_lb = params["ema_rising_lookback_days"]
     def _rising(series: pd.Series) -> bool:
         return today_idx - rising_lb >= 0 and series.iloc[today_idx] > series.iloc[today_idx - rising_lb]
@@ -225,6 +258,9 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         f"✓ Fanned out, not tangled: EMA{params['ema_fast']} is {spread_pct:.2f}% above EMA{params['ema_slow']}",
         f"✓ Trending, not flat: close is up {momentum_pct:.1f}% over the last {mom_lb} sessions",
         f"✓ RSI {rsi_now:.1f} within the {params['rsi_min']:.0f}-{params['rsi_max']:.0f} healthy range",
+        f"✓ Inside a valid rising channel ({channel['window']} sessions, {len(channel['res_touches'])} "
+        f"resistance / {len(channel['sup_touches'])} support touches), {channel_distance_pct:.2f}% below "
+        f"its resistance -- ready to break out",
     ]
     if aligned:
         why.append(
@@ -253,6 +289,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "EMA Slow": round(ema_slow_now, 2),
         "EMA Spread %": round(spread_pct, 2),
         "Trend SMA": round(trend_sma_now, 2),
+        "Channel Resistance": round(channel_res_now, 2),
+        "Channel Distance %": round(channel_distance_pct, 2),
         "Golden Cross Date": cross_date,
         "Days Since Cross": cross_age_days,
         "Momentum %": round(momentum_pct, 2),
@@ -261,14 +299,16 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "Why Qualified": "\n".join(why),
         "_cross_idx": cross_idx,
         "_signal_idx": today_idx,
+        "_channel": channel,
     }
 
 
 _STATUS_ORDER = {"Confirmed Breakout": 0, "Bullish Alignment": 1, "Golden Cross Formed": 2}
 _DISPLAY_COLUMNS = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "EMA Fast", "EMA Mid", "EMA Slow", "EMA Spread %", "Trend SMA", "Golden Cross Date", "Days Since Cross",
-    "Momentum %", "RSI", "Volume Ratio", "Why Qualified",
+    "EMA Fast", "EMA Mid", "EMA Slow", "EMA Spread %", "Trend SMA", "Channel Resistance",
+    "Channel Distance %", "Golden Cross Date", "Days Since Cross", "Momentum %", "RSI", "Volume Ratio",
+    "Why Qualified",
 ]
 
 
@@ -330,6 +370,7 @@ def scan_triple_ema_golden_cross(
         "confirmed_breakout": _build_table(rows, "Confirmed Breakout"),
         "cross_idx": {r["Ticker"]: r["_cross_idx"] for r in rows},
         "signal_idx": {r["Ticker"]: r["_signal_idx"] for r in rows},
+        "channels": {r["Ticker"]: r["_channel"] for r in rows},
         "universe_size": len(tickers),
         "scanned": len(history),
         "min_price": min_price,
@@ -341,16 +382,22 @@ def scan_triple_ema_golden_cross(
 
 def build_golden_cross_chart(
     df: pd.DataFrame, cross_idx: int, signal_idx: int, params: dict, ticker: str,
+    channel: dict | None = None,
 ):
     """3-row Plotly subplot: candlestick + EMA-fast (green) / EMA-mid
-    (red) / EMA-slow (blue) + a marker at the golden-cross candle, /
-    Volume (signal day highlighted) / RSI(14) with the strategy's own
-    healthy-range band shaded.
+    (red) / EMA-slow (blue) + a marker at the golden-cross candle, plus
+    -- when a channel gate matched -- the same sloped resistance/support
+    lines and swing-point markers `rising_channel.build_channel_chart`
+    draws, so the chart visibly shows the contained, ready-to-break-out
+    structure the channel gate actually checked / Volume (signal day
+    highlighted) / RSI(14) with the strategy's own healthy-range band
+    shaded.
     """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
-    plot_start = max(0, cross_idx - 20)
+    plot_start = min(cross_idx, channel["start"]) if channel else cross_idx
+    plot_start = max(0, plot_start - 10)
     plot_end = min(len(df) - 1, signal_idx + 5)
     plot_df = df.iloc[plot_start:plot_end + 1]
 
@@ -385,6 +432,33 @@ def build_golden_cross_chart(
         x=[df.index[cross_idx]], y=[cross_price],
         mode="markers", name="Golden Cross", marker=dict(color="#4FD1E8", size=12, symbol="cross"),
     ), row=1, col=1)
+
+    if channel is not None:
+        line_end = max(channel["end"], signal_idx)
+        line_idx = list(range(channel["start"], line_end + 1))
+        line_dates = [df.index[i] for i in line_idx]
+        res_vals = [channel["slope_r"] * i + channel["intercept_r"] for i in line_idx]
+        sup_vals = [channel["slope_s"] * i + channel["intercept_s"] for i in line_idx]
+        fig.add_trace(go.Scatter(
+            x=line_dates, y=res_vals, mode="lines", name="Channel Resistance",
+            line=dict(color="#4F7CFF", width=2),
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=line_dates, y=sup_vals, mode="lines", name="Channel Support",
+            line=dict(color="#4F7CFF", width=2, dash="dot"),
+        ), row=1, col=1)
+        sh_dates = [df.index[i] for i in channel["swing_highs"]]
+        sh_prices = [float(df["High"].iloc[i]) for i in channel["swing_highs"]]
+        fig.add_trace(go.Scatter(
+            x=sh_dates, y=sh_prices, mode="markers", name="Swing High",
+            marker=dict(color="#FF6B6B", size=8, symbol="triangle-down"),
+        ), row=1, col=1)
+        sl_dates = [df.index[i] for i in channel["swing_lows"]]
+        sl_prices = [float(df["Low"].iloc[i]) for i in channel["swing_lows"]]
+        fig.add_trace(go.Scatter(
+            x=sl_dates, y=sl_prices, mode="markers", name="Swing Low",
+            marker=dict(color="#3ECF8E", size=8, symbol="triangle-up"),
+        ), row=1, col=1)
 
     vol_colors = ["#FFB020" if i == signal_idx else "#4F7CFF" for i in range(plot_start, plot_end + 1)]
     fig.add_trace(go.Bar(x=plot_df.index, y=plot_df["Volume"], name="Volume", marker_color=vol_colors), row=2, col=1)
