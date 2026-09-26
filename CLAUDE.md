@@ -847,6 +847,83 @@ highlighted orange / RSI(14) with the strategy's own healthy-range band
 shaded) -- deliberately the same green/red/blue EMA color convention as
 the source chart -- plus the row's own "Why Qualified" string underneath.
 
+## Eighth strategy: "Breakout Flag Continuation"
+
+`src/breakout_flag.py`, page "🚩 Breakout Flag Continuation" -- built
+from a real example (RPG Life Sciences) that fell through the gaps of
+every other strategy: a huge, volume-confirmed breakout candle (a sharp
+gap, not a smooth climb) broke the parallel-channel geometry Daily
+Rising Channel's and Triple EMA Golden Cross's channel-fit gates need,
+while Resistance Breakout's own 8%+ deep-base requirement over a long
+swing-high lookback doesn't fit a shallow 2-10% flag either. Adjustable
+from the UI (see `default_params()` / config.py's `BREAKOUT_FLAG_*`
+defaults), since this came from one real example, not a numbered spec.
+
+**Key design difference from Resistance Breakout**: resistance here is
+a plain trailing rolling-max High (`_find_recent_breakout`), not a
+swing-point search -- so a single sharp gap candle doesn't break the
+fit the way it can for the channel-based strategies. The pullback this
+strategy wants is *shallow* (`flag_pullback_min/max_pct`, default 2-10%)
+and *recent* (within `breakout_lookback_days`, default 20 sessions, of
+a *fresh* volume breakout), the opposite of Resistance Breakout's deep,
+multi-month base.
+
+**The stages, as rules** (`evaluate_ticker`):
+
+- **Fresh breakout**: `_find_recent_breakout` scans the trailing
+  `breakout_lookback_days` window for the *most recent* session where
+  close cleared the trailing `resistance_lookback_days` (default 60)
+  -session rolling-max High, on `breakout_volume_mult` (default 1.5x)
+  volume -- picking the freshest flagpole if several qualify.
+- **Flagpole high / flag low**: the peak High reached at/after the
+  breakout, and the lowest Low since that peak. If the stock is still
+  making fresh highs every session since the breakout, there's no
+  pullback low yet to measure -- not a "flag" yet, so no match.
+- **Shallow flag, still holding**: `pullback_pct` (flagpole high to
+  flag low) must fall within the configured band, *and* the flag low
+  must not dip more than `retest_tolerance_pct` (default 3%) below the
+  original breakout resistance -- otherwise this was a failed breakout,
+  not a flag.
+- **Flag Watchlist**: everything above holds, but today's close hasn't
+  yet challenged the flagpole high again -- still consolidating/
+  recovering inside the flag.
+- **Confirmed Continuation / Continuation — Volume Unconfirmed**:
+  yesterday's close was at/below the flagpole high (plus
+  `continuation_min_pct` clearance) and today's clears it -- a fresh
+  continuation, not one that happened days ago. Volume
+  ≥ `continuation_volume_mult` (default 1.5x) splits Confirmed from
+  Unconfirmed, both computed in the same pass.
+
+**Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks"
+(same loaders as every other strategy), mandatory
+`config.BREAKOUT_FLAG_MIN_PRICE_INR` (₹100) floor shown as a caption.
+Own cache (`st.session_state.breakout_flag_cache`, keyed by
+`(universe_name, sorted(params.items()))`), not logged to
+`scan_history`.
+
+**Results tables**: three tabs (Flag Watchlist / Confirmed Continuation
+/ Continuation — Volume Unconfirmed), each with Symbol, Company Name,
+Setup Status, Signal Date, Current Price, Resistance Level, Breakout
+Date, Flagpole High, Flag Low, Pullback %, Distance %, RSI, Volume
+Ratio. Selecting a row sets a page-local
+`st.session_state.bf_selected_ticker` and loads
+`breakout_flag.build_flag_chart()`: a 2-row Plotly subplot (price + a
+flat, dashed breakout-resistance line + a cyan star marker on the
+breakout day + a green △ flag-low marker / Volume, with *both* the
+breakout day and the signal day highlighted -- cyan and orange
+respectively -- so the original volume spike and any continuation
+volume are both visible at a glance).
+
+**Verified against real data**: a full Nifty 500 scan found 12 Flag
+Watchlist matches with coherent numbers (breakout dates within the last
+~2 weeks, flagpole highs above their resistance, pullbacks within the
+2-7% range, healthy RSI). RPG Life Sciences itself correctly does NOT
+appear as of the data available at build time -- it rallied hard but
+its close never actually cleared its July high of ₹3,082 (only
+approaching it), which this strategy's fresh-breakout gate requires by
+construction; it's expected to surface here once that close is
+confirmed above ₹3,082 on volume.
+
 ## Home page layout: terminal-style split
 
 Top to bottom:

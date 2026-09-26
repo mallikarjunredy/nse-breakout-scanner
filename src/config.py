@@ -194,6 +194,28 @@ TRIPLE_EMA_TREND_SMA_PERIOD = 200
 TRIPLE_EMA_CHANNEL_DISTANCE_MIN_PCT = 0.0
 TRIPLE_EMA_CHANNEL_DISTANCE_MAX_PCT = 5.0
 
+# "Breakout Flag Continuation" -- see src/breakout_flag.py. Adjustable
+# defaults, like Rising Channel / Resistance Breakout / Triple EMA
+# Golden Cross: built from a real example (RPG Life Sciences) rather
+# than a numbered spec. Distinct from Resistance Breakout's deep 8%+
+# base over a long swing-high lookback: this strategy wants a *shallow*
+# pullback shortly after a *fresh* volume breakout, and uses a simple
+# rolling-max resistance (not a swing-point search) so a single sharp
+# gap candle doesn't break the fit the way it can for the channel-based
+# strategies.
+BREAKOUT_FLAG_MIN_PRICE_INR = 100.0
+BREAKOUT_FLAG_RESISTANCE_LOOKBACK_DAYS = 60  # trailing window defining "resistance" before a breakout day
+BREAKOUT_FLAG_BREAKOUT_LOOKBACK_DAYS = 20  # how far back to search for the most recent qualifying breakout
+BREAKOUT_FLAG_BREAKOUT_VOLUME_MULT = 1.5
+BREAKOUT_FLAG_BREAKOUT_VOLUME_AVG_PERIOD = 20
+BREAKOUT_FLAG_PULLBACK_MIN_PCT = 2.0  # shallow flag, not Resistance Breakout's deep base
+BREAKOUT_FLAG_PULLBACK_MAX_PCT = 10.0
+BREAKOUT_FLAG_RETEST_TOLERANCE_PCT = 3.0  # how far the flag low may dip below the breakout resistance and still count as "holding"
+BREAKOUT_FLAG_CONTINUATION_MIN_PCT = 0.5  # close must clear the flagpole high by at least this %
+BREAKOUT_FLAG_CONTINUATION_VOLUME_MULT = 1.5
+BREAKOUT_FLAG_RSI_MIN = 45.0
+BREAKOUT_FLAG_RSI_MAX = 80.0
+
 # Paper-trading / backtest defaults for the same strategy.
 TREND_CONSOL_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital
 TREND_CONSOL_BACKTEST_RISK_PCT = 0.5  # % of current equity risked per trade

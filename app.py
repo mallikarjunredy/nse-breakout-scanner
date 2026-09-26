@@ -16,8 +16,9 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 
 from src import (
-    bullish_recovery, config, deep_dive, detail, indicators, market_overview, pre_breakout, resistance_breakout,
-    rising_channel, scan_history, scanner, trend_consolidation, triple_ema_golden_cross, watchlist,
+    breakout_flag, bullish_recovery, config, deep_dive, detail, indicators, market_overview, pre_breakout,
+    resistance_breakout, rising_channel, scan_history, scanner, trend_consolidation, triple_ema_golden_cross,
+    watchlist,
 )
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
@@ -157,6 +158,10 @@ if "triple_ema_cache" not in st.session_state:
     st.session_state.triple_ema_cache = {}  # keyed by (universe_name, sorted(params.items()))
 if "teg_selected_ticker" not in st.session_state:
     st.session_state.teg_selected_ticker = None
+if "breakout_flag_cache" not in st.session_state:
+    st.session_state.breakout_flag_cache = {}  # keyed by (universe_name, sorted(params.items()))
+if "bf_selected_ticker" not in st.session_state:
+    st.session_state.bf_selected_ticker = None
 if "watchlist_cache" not in st.session_state:
     st.session_state.watchlist_cache = {}
 if "selected_ticker" not in st.session_state:
@@ -285,7 +290,7 @@ _NAV_ITEMS = [
     ("Home", "🏠"), ("Upside Buy Movement", "🎯"), ("Upside Buy Movement above 100", "💹"),
     ("Daily Rising Channel", "📐"), ("Daily Trend + Consolidation", "🧭"),
     ("Trend + Consolidation Backtest", "🧪"), ("Bullish Recovery Above EMAs", "🌅"),
-    ("Resistance Breakout", "⛰️"), ("Triple EMA Golden Cross", "🥇"),
+    ("Resistance Breakout", "⛰️"), ("Triple EMA Golden Cross", "🥇"), ("Breakout Flag Continuation", "🚩"),
     ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
 ]
 
@@ -2797,6 +2802,219 @@ if nav_page == "Triple EMA Golden Cross":
         "claim that any stock will keep moving in this direction."
     )
     render_footer(scan_ts=teg_scan_time)
+
+
+# ---------------------------------------------------------------------------
+# Page: Breakout Flag Continuation
+# ---------------------------------------------------------------------------
+
+_BF_COLUMN_ORDER = [
+    "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
+    "Resistance Level", "Breakout Date", "Flagpole High", "Flag Low", "Pullback %",
+    "% Below Flagpole High", "RSI", "Volume Ratio",
+]
+_BF_COLUMN_CONFIG = {
+    "Rank": st.column_config.NumberColumn("Rank", width="small"),
+    "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+    "Company Name": st.column_config.TextColumn("Company Name"),
+    "Setup Status": st.column_config.TextColumn("Status", width="small"),
+    "Signal Date": st.column_config.TextColumn("Signal Date", width="small"),
+    "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
+    "Resistance Level": st.column_config.NumberColumn("Resistance", format="₹%.2f"),
+    "Breakout Date": st.column_config.TextColumn("Breakout Date", width="small"),
+    "Flagpole High": st.column_config.NumberColumn("Flagpole High", format="₹%.2f"),
+    "Flag Low": st.column_config.NumberColumn("Flag Low", format="₹%.2f"),
+    "Pullback %": st.column_config.NumberColumn("Pullback %", format="%.1f%%"),
+    "% Below Flagpole High": st.column_config.NumberColumn("Distance %", format="%.2f%%"),
+    "RSI": st.column_config.NumberColumn("RSI14", format="%.1f"),
+    "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+}
+
+
+def _render_bf_tab(df: pd.DataFrame, key_prefix: str):
+    if df.empty:
+        st.info("No stocks matched your saved strategy in this scan.")
+        return
+    _export_buttons(df, key_prefix, key_prefix)
+    event = st.dataframe(
+        df, hide_index=True, width="stretch", column_config=_BF_COLUMN_CONFIG,
+        column_order=[c for c in _BF_COLUMN_ORDER if c in df.columns],
+        on_select="rerun", selection_mode="single-row", key=f"{key_prefix}_table",
+    )
+    rows = event["selection"]["rows"]
+    if rows:
+        st.session_state.bf_selected_ticker = df.iloc[rows[0]]["Ticker"]
+
+
+if nav_page == "Breakout Flag Continuation":
+    st.markdown("### 🚩 Breakout Flag Continuation")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "A stock already broke out above a meaningful resistance on volume, pulled back only shallowly (a "
+        "'flag,' not a deep base), held above that resistance through the pullback, and is now resuming "
+        "(Flag Watchlist) or has broken back above the post-breakout high (Confirmed Continuation / "
+        "Continuation — Volume Unconfirmed). Distinct from Resistance Breakout's deep 8%+ base over a long "
+        "swing-high lookback -- this uses a simple rolling-max resistance so a single sharp gap-up breakout "
+        "candle doesn't break the fit. Rule-based scanner matches, not guaranteed profitable recommendations."
+    )
+
+    bf_universe_choice = st.radio(
+        "Universe", ["Nifty 500", "All Stocks"], horizontal=True, key="bf_universe",
+    )
+    bf_universe_name = "nifty500" if bf_universe_choice == "Nifty 500" else "all_nse"
+    st.caption(f"✅ Mandatory: closing price > ₹{config.BREAKOUT_FLAG_MIN_PRICE_INR:.0f}.")
+
+    with st.expander("⚙️ Adjust Thresholds"):
+        bf1, bf2, bf3 = st.columns(3)
+        bf_res_lookback = bf1.slider(
+            "Resistance Lookback (sessions)", 20, 150, config.BREAKOUT_FLAG_RESISTANCE_LOOKBACK_DAYS, 5,
+            key="bf_res_lookback", help="Trailing window used to define resistance before a breakout day.",
+        )
+        bf_breakout_lookback = bf2.slider(
+            "Breakout Lookback (sessions)", 5, 40, config.BREAKOUT_FLAG_BREAKOUT_LOOKBACK_DAYS, 1,
+            key="bf_breakout_lookback", help="How far back to search for the most recent qualifying breakout.",
+        )
+        bf_breakout_vol_mult = bf3.slider(
+            "Breakout Volume Multiplier", 1.0, 4.0, config.BREAKOUT_FLAG_BREAKOUT_VOLUME_MULT, 0.1,
+            key="bf_breakout_vol_mult",
+        )
+        bf4, bf5, bf6 = st.columns(3)
+        bf_pullback = bf4.slider(
+            "Flag Pullback (%)", 0.5, 20.0,
+            (config.BREAKOUT_FLAG_PULLBACK_MIN_PCT, config.BREAKOUT_FLAG_PULLBACK_MAX_PCT), 0.5,
+            key="bf_pullback", help="Shallow pullback since the breakout -- not Resistance Breakout's deep base.",
+        )
+        bf_retest_tolerance = bf5.slider(
+            "Retest Tolerance (%)", 0.0, 10.0, config.BREAKOUT_FLAG_RETEST_TOLERANCE_PCT, 0.5,
+            key="bf_retest_tolerance",
+            help="How far the flag low may dip below the breakout resistance and still count as holding.",
+        )
+        bf_continuation_min = bf6.slider(
+            "Continuation Min. Clearance (%)", 0.1, 3.0, config.BREAKOUT_FLAG_CONTINUATION_MIN_PCT, 0.1,
+            key="bf_continuation_min", help="Close must clear the flagpole high by at least this %.",
+        )
+        bf7, bf8 = st.columns(2)
+        bf_continuation_vol_mult = bf7.slider(
+            "Continuation Volume Multiplier", 1.0, 4.0, config.BREAKOUT_FLAG_CONTINUATION_VOLUME_MULT, 0.1,
+            key="bf_continuation_vol_mult",
+        )
+        bf_rsi = bf8.slider(
+            "RSI Healthy Range", 0, 100,
+            (int(config.BREAKOUT_FLAG_RSI_MIN), int(config.BREAKOUT_FLAG_RSI_MAX)), key="bf_rsi",
+        )
+
+    bf_params = breakout_flag.default_params()
+    bf_params.update({
+        "resistance_lookback_days": bf_res_lookback,
+        "breakout_lookback_days": bf_breakout_lookback,
+        "breakout_volume_mult": bf_breakout_vol_mult,
+        "flag_pullback_min_pct": bf_pullback[0],
+        "flag_pullback_max_pct": bf_pullback[1],
+        "retest_tolerance_pct": bf_retest_tolerance,
+        "continuation_min_pct": bf_continuation_min,
+        "continuation_volume_mult": bf_continuation_vol_mult,
+        "rsi_min": float(bf_rsi[0]),
+        "rsi_max": float(bf_rsi[1]),
+    })
+    bf_cache_key = (bf_universe_name, tuple(sorted(bf_params.items())))
+
+    bf_cache = st.session_state.breakout_flag_cache.get(bf_cache_key)
+    run_bf_clicked = st.button("▶️ Run Breakout Flag Scan", type="primary", key="run_breakout_flag")
+
+    if run_bf_clicked or bf_cache is None:
+        bf_progress = st.progress(0, text="Starting scan...")
+
+        def _on_bf_progress(frac, text_):
+            bf_progress.progress(min(frac, 1.0), text=text_)
+
+        try:
+            with st.spinner(f"Scanning {bf_universe_choice} for Breakout Flag Continuation setups..."):
+                result_bf = breakout_flag.scan_breakout_flag(
+                    universe_name=bf_universe_name, min_price=config.BREAKOUT_FLAG_MIN_PRICE_INR,
+                    params=bf_params, progress_callback=_on_bf_progress,
+                )
+            bf_progress.empty()
+            st.session_state.breakout_flag_cache[bf_cache_key] = (time.time(), result_bf)
+        except Exception as exc:
+            bf_progress.empty()
+            st.error(f"Scan failed: {exc}. This is usually a temporary Yahoo Finance or network issue -- try again.")
+            result_bf = None
+    else:
+        result_bf = bf_cache[1]
+
+    if result_bf is None:
+        st.stop()
+
+    bf_scan_time = st.session_state.breakout_flag_cache[bf_cache_key][0]
+    bf_scan_label = datetime.datetime.fromtimestamp(bf_scan_time, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
+    bf_asof = result_bf.get("data_asof_date")
+    bf_asof_label = bf_asof.strftime("%d %b %Y") if bf_asof else "N/A"
+    st.caption(
+        f"Last scanned: {bf_scan_label} · Prices as of {bf_asof_label} close · "
+        f"Universe: {result_bf['universe_label']} ({result_bf['universe_size']} instruments) · "
+        f"Scanned OK: {result_bf['scanned']}"
+    )
+    bf_next_refresh_in = config.SCAN_CACHE_TTL_SECONDS - (time.time() - bf_scan_time)
+    if bf_next_refresh_in <= 0:
+        st.caption("⏳ This data may be stale -- use ▶️ Run Breakout Flag Scan for the latest.")
+
+    watchlist_df_bf = result_bf["flag_watchlist"]
+    confirmed_df_bf = result_bf["confirmed_continuation"]
+    unconfirmed_df_bf = result_bf["volume_unconfirmed"]
+
+    tab_watchlist_bf, tab_confirmed_bf, tab_unconfirmed_bf = st.tabs([
+        f"🚩 Flag Watchlist ({len(watchlist_df_bf)})",
+        f"🚀 Confirmed Continuation ({len(confirmed_df_bf)})",
+        f"⚠️ Continuation — Volume Unconfirmed ({len(unconfirmed_df_bf)})",
+    ])
+    with tab_watchlist_bf:
+        st.caption("A fresh volume breakout, a shallow pullback still holding above resistance -- watching for a resumption.")
+        _render_bf_tab(watchlist_df_bf, "bf_watchlist")
+    with tab_confirmed_bf:
+        st.caption("Closed back above the post-breakout high, on the required volume.")
+        _render_bf_tab(confirmed_df_bf, "bf_confirmed")
+    with tab_unconfirmed_bf:
+        st.caption("Same price continuation, but volume didn't confirm it -- treat with extra caution.")
+        _render_bf_tab(unconfirmed_df_bf, "bf_unconfirmed")
+
+    st.divider()
+    st.markdown("#### 📊 Selected Candidate Chart")
+    bf_ticker = st.session_state.bf_selected_ticker
+    if not bf_ticker:
+        st.caption("👆 Click a row in any table above to see its chart here.")
+    else:
+        bf_breakout_idx = result_bf["breakout_idx"].get(bf_ticker)
+        bf_flag_low_idx = result_bf["flag_low_idx"].get(bf_ticker)
+        bf_sig_idx = result_bf["signal_idx"].get(bf_ticker)
+        bf_combined = pd.concat([watchlist_df_bf, confirmed_df_bf, unconfirmed_df_bf], ignore_index=True)
+        bf_match = bf_combined[bf_combined["Ticker"] == bf_ticker]
+        if bf_breakout_idx is None or bf_flag_low_idx is None or bf_sig_idx is None or bf_match.empty:
+            st.caption(f"No data for {bf_ticker} under the current scan -- select a row above again.")
+        else:
+            bf_row = bf_match.iloc[0]
+            with st.spinner(f"Loading chart for {bf_ticker}..."):
+                bf_chart_history = scanner.download_history([bf_ticker])
+            bf_chart_df = bf_chart_history.get(bf_ticker)
+            if bf_chart_df is None:
+                st.caption("Price history unavailable for this ticker right now.")
+            else:
+                bf_fig = breakout_flag.build_flag_chart(
+                    bf_chart_df, bf_breakout_idx, float(bf_row["Resistance Level"]),
+                    bf_flag_low_idx, float(bf_row["Flag Low"]), bf_sig_idx, bf_ticker,
+                )
+                st.plotly_chart(bf_fig, width="stretch")
+                st.caption(
+                    "Red dashed line = breakout resistance. Cyan star = the breakout day (its Volume bar is "
+                    "also cyan). Green △ = flag low. The signal day's Volume bar is highlighted orange."
+                )
+                st.markdown(f"**Why qualified:**\n\n{bf_row['Why Qualified']}")
+
+    st.caption(
+        "The breakout/flag/continuation structure and volume confirmation are rule-based checks against "
+        "this strategy's own adjustable thresholds -- not guaranteed profitable recommendations, and not a "
+        "claim that any stock will keep moving in this direction."
+    )
+    render_footer(scan_ts=bf_scan_time)
 
 
 # ---------------------------------------------------------------------------
