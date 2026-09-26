@@ -48,11 +48,17 @@ dashed) rather than something the user has to compute themselves from
 the resistance level and the buffer %. Shown for every match in both
 tiers -- for the watchlist it's "buy above this price to confirm";
 for a breakout it's the exact level that was cleared.
+
+EMA10/EMA20 (added at the user's request): plain reference lines, same
+convention as Bullish Recovery Above EMAs, for visual/trend context
+only -- this strategy's own rules are entirely about the previous-high/
+pullback/recovery/breakout structure, so a ticker's EMA10/EMA20 values
+never gate a match here.
 """
 
 import pandas as pd
 
-from . import config, rising_channel, scanner, universe
+from . import config, indicators, rising_channel, scanner, universe
 
 _UNIVERSE_LOADERS = {
     "nifty500": (universe.get_nifty_500, "Nifty 500"),
@@ -131,6 +137,15 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     if price_today <= min_price:
         return None
 
+    # EMA10/EMA20 reference lines, added at the user's request -- shown
+    # on the chart and in the results table for visual/trend context,
+    # same convention as Bullish Recovery Above EMAs. Not a filter
+    # condition here: this strategy's own rules are about the previous-
+    # high/pullback/recovery/breakout structure, not EMA position, so a
+    # ticker's EMA10/EMA20 values are display-only and never gate a match.
+    ema10_now = float(indicators.compute_ema(df["Close"], 10).iloc[today_idx])
+    ema20_now = float(indicators.compute_ema(df["Close"], 20).iloc[today_idx])
+
     found = _find_previous_high(df, today_idx, params)
     if found is None:
         return None
@@ -184,6 +199,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "Resistance Level": round(resistance, 2),
         "Resistance Date": resistance_date,
         "Buy Level": round(buy_level, 2),
+        "EMA10": round(ema10_now, 2),
+        "EMA20": round(ema20_now, 2),
         "Pullback Low": round(pullback_low, 2),
         "Pullback %": round(pullback_pct, 2),
         "Momentum %": round(momentum_pct, 2),
@@ -246,8 +263,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
 
 _DISPLAY_COLUMNS = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "Resistance Level", "Buy Level", "Resistance Date", "Pullback Low", "Pullback %", "Momentum %",
-    "% Below Resistance", "Volume Ratio", "Why Qualified",
+    "Resistance Level", "Buy Level", "EMA10", "EMA20", "Resistance Date", "Pullback Low", "Pullback %",
+    "Momentum %", "% Below Resistance", "Volume Ratio", "Why Qualified",
 ]
 
 
@@ -324,13 +341,13 @@ def build_breakout_chart(
     pullback_idx: int, pullback_val: float, signal_idx: int, ticker: str,
     buy_level: float | None = None,
 ):
-    """Candlestick + the flat previous-high resistance line (drawn from
-    the previous-high candle out to the signal candle) + a green Buy
-    Level line (resistance + the strategy's own breakout buffer -- the
-    exact price a close needs to clear to confirm the breakout) +
-    previous-high / pullback-low markers + a Volume panel with the
-    signal day's bar highlighted, so "visibly higher volume" is
-    literally visible.
+    """Candlestick + EMA10/EMA20 reference lines + the flat previous-high
+    resistance line (drawn from the previous-high candle out to the
+    signal candle) + a green Buy Level line (resistance + the strategy's
+    own breakout buffer -- the exact price a close needs to clear to
+    confirm the breakout) + previous-high / pullback-low markers + a
+    Volume panel with the signal day's bar highlighted, so "visibly
+    higher volume" is literally visible.
     """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -339,6 +356,9 @@ def build_breakout_chart(
     plot_end = min(len(df) - 1, signal_idx + 5)
     plot_df = df.iloc[plot_start:plot_end + 1]
 
+    ema10 = indicators.compute_ema(df["Close"], 10).iloc[plot_start:plot_end + 1]
+    ema20 = indicators.compute_ema(df["Close"], 20).iloc[plot_start:plot_end + 1]
+
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.06,
         subplot_titles=(f"{ticker.replace('.NS', '')} — Resistance Breakout", "Volume"),
@@ -346,6 +366,12 @@ def build_breakout_chart(
     fig.add_trace(go.Candlestick(
         x=plot_df.index, open=plot_df["Open"], high=plot_df["High"], low=plot_df["Low"], close=plot_df["Close"],
         increasing_line_color="#3ECF8E", decreasing_line_color="#FF6B6B", name=ticker,
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=ema10.index, y=ema10, mode="lines", name="EMA10", line=dict(color="#4FD1E8", width=1.3, dash="dot"),
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=ema20.index, y=ema20, mode="lines", name="EMA20", line=dict(color="#B26BFF", width=1.3, dash="dot"),
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(

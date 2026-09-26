@@ -2340,8 +2340,8 @@ if nav_page == "Bullish Recovery Above EMAs":
 
 _RBO_COLUMN_ORDER = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "Resistance Level", "Buy Level", "Resistance Date", "Pullback Low", "Pullback %", "Momentum %",
-    "% Below Resistance", "Volume Ratio",
+    "Resistance Level", "Buy Level", "EMA10", "EMA20", "Resistance Date", "Pullback Low", "Pullback %",
+    "Momentum %", "% Below Resistance", "Volume Ratio",
 ]
 _RBO_COLUMN_CONFIG = {
     "Rank": st.column_config.NumberColumn("Rank", width="small"),
@@ -2352,6 +2352,8 @@ _RBO_COLUMN_CONFIG = {
     "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
     "Resistance Level": st.column_config.NumberColumn("Previous High", format="₹%.2f"),
     "Buy Level": st.column_config.NumberColumn("Buy Level", format="₹%.2f"),
+    "EMA10": st.column_config.NumberColumn("EMA10", format="₹%.2f"),
+    "EMA20": st.column_config.NumberColumn("EMA20", format="₹%.2f"),
     "Resistance Date": st.column_config.TextColumn("High Date", width="small"),
     "Pullback Low": st.column_config.NumberColumn("Pullback Low", format="₹%.2f"),
     "Pullback %": st.column_config.NumberColumn("Pullback %", format="%.1f%%"),
@@ -2544,9 +2546,10 @@ if nav_page == "Resistance Breakout":
                 )
                 st.plotly_chart(rbo_fig, width="stretch")
                 st.caption(
-                    "Red ▽ = previous high (resistance). Green dashed line = Buy Level (resistance + breakout "
-                    "buffer). Green △ = pullback low. Orange marker = the signal candle; its Volume bar is "
-                    "also highlighted orange, so a volume spike is visible at a glance."
+                    "Cyan/purple dotted lines = EMA10/EMA20 (reference only). Red ▽ = previous high "
+                    "(resistance). Green dashed line = Buy Level (resistance + breakout buffer). Green △ = "
+                    "pullback low. Orange marker = the signal candle; its Volume bar is also highlighted "
+                    "orange, so a volume spike is visible at a glance."
                 )
                 st.markdown(f"**Why qualified:**\n\n{rbo_row['Why Qualified']}")
 

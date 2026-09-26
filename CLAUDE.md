@@ -670,17 +670,34 @@ own price-floor treatment). Own cache
 pattern as the other adjustable strategies), not logged to
 `scan_history`.
 
+**Buy Level** (added at the user's request for "a trend line for
+buying"): `resistance * (1 + breakout_min_pct / 100)` -- the exact
+price a close needs to clear to confirm the breakout, i.e. the same
+threshold `evaluate_ticker` already used internally for the breakout
+check, now surfaced explicitly as its own column and a green dashed
+chart line rather than something the user has to compute themselves
+from the resistance level and the buffer %. Shown for every match in
+both tiers.
+
+**EMA10/EMA20** (added at the user's request): plain reference lines,
+same convention as Bullish Recovery Above EMAs, computed in
+`evaluate_ticker` and drawn as cyan/purple dotted lines on the chart --
+display-only. This strategy's own rules are entirely about the
+previous-high/pullback/recovery/breakout structure, so a ticker's
+EMA10/EMA20 values never gate a match here.
+
 **Results tables**: three tabs (Pre-Breakout Watchlist / Confirmed
 Breakouts / Breakout — Volume Unconfirmed), each with Symbol, Company
 Name, Setup Status, Signal Date, Current Price, Resistance Level
-("Previous High"), Resistance Date, Pullback Low, Pullback %, Momentum
-%, Distance %, Volume Ratio. Selecting a row sets a page-local
-`st.session_state.rbo_selected_ticker` (like `rc_selected_ticker`), not
-the shared detail panel, and loads
+("Previous High"), Buy Level, EMA10, EMA20, Resistance Date, Pullback
+Low, Pullback %, Momentum %, Distance %, Volume Ratio. Selecting a row
+sets a page-local `st.session_state.rbo_selected_ticker` (like
+`rc_selected_ticker`), not the shared detail panel, and loads
 `resistance_breakout.build_breakout_chart()`: a 2-row Plotly subplot
-(price + a flat previous-high resistance line drawn from the previous-
-high candle to the signal candle, with ▽/△ markers for the previous
-high and pullback low / Volume, with the signal day's bar highlighted
+(price + EMA10/EMA20 dotted lines + a flat previous-high resistance
+line drawn from the previous-high candle to the signal candle + the Buy
+Level as a green dashed line, with ▽/△ markers for the previous high
+and pullback low / Volume, with the signal day's bar highlighted
 orange) so "visibly higher volume" is literally visible at a glance --
 plus the row's own "Why Qualified" string underneath.
 
