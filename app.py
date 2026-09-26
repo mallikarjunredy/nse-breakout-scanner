@@ -2340,7 +2340,7 @@ if nav_page == "Bullish Recovery Above EMAs":
 
 _RBO_COLUMN_ORDER = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "Resistance Level", "Buy Level", "EMA10", "EMA20", "Resistance Date", "Pullback Low", "Pullback %",
+    "Resistance Level", "Buy Level", "EMA10", "EMA20", "RSI", "Resistance Date", "Pullback Low", "Pullback %",
     "Momentum %", "% Below Resistance", "Volume Ratio",
 ]
 _RBO_COLUMN_CONFIG = {
@@ -2354,6 +2354,7 @@ _RBO_COLUMN_CONFIG = {
     "Buy Level": st.column_config.NumberColumn("Buy Level", format="₹%.2f"),
     "EMA10": st.column_config.NumberColumn("EMA10", format="₹%.2f"),
     "EMA20": st.column_config.NumberColumn("EMA20", format="₹%.2f"),
+    "RSI": st.column_config.NumberColumn("RSI14", format="%.1f"),
     "Resistance Date": st.column_config.TextColumn("High Date", width="small"),
     "Pullback Low": st.column_config.NumberColumn("Pullback Low", format="₹%.2f"),
     "Pullback %": st.column_config.NumberColumn("Pullback %", format="%.1f%%"),
@@ -2390,8 +2391,10 @@ if nav_page == "Resistance Breakout":
         "recovery leg may simply look cup-shaped. A minimum-momentum gate excludes stocks just sitting "
         "flat/consolidating near the previous high with no real forward movement behind them. Each match "
         "shows a **Buy Level** (resistance + the breakout buffer -- the exact price a close needs to clear "
-        "to confirm the breakout), also drawn as a green line on the chart. Rule-based scanner matches, "
-        "not guaranteed profitable recommendations."
+        "to confirm the breakout), also drawn as a green line on the chart, plus an RSI momentum note "
+        "comparing today's RSI to RSI when the original high was made -- a caution flag if weaker, never a "
+        "reason a stock is excluded (rising price on weakening RSI doesn't mean it must fall or can't break "
+        "resistance). Rule-based scanner matches, not guaranteed profitable recommendations."
     )
 
     rbo_universe_choice = st.radio(

@@ -54,6 +54,19 @@ convention as Bullish Recovery Above EMAs, for visual/trend context
 only -- this strategy's own rules are entirely about the previous-high/
 pullback/recovery/breakout structure, so a ticker's EMA10/EMA20 values
 never gate a match here.
+
+RSI momentum note (added after discussing whether rising price on flat/
+falling RSI -- bearish divergence -- should exclude a stock): it
+shouldn't, on its own. RSI measures the strength of recent gains/losses,
+not price level, so a stock can keep climbing while each new push is
+backed by relatively less strength; that's a real caution sign but a
+probabilistic one, not proof of an imminent reversal -- divergence can
+persist through further strength in a genuine trend. Rather than gate
+on it, `evaluate_ticker` compares today's RSI to RSI back when the
+*original* high was made (the specific level this stock is now
+challenging) and adds a plain-language note to "Why Qualified" -- a
+caution flag the user can weigh themselves, never a condition a ticker
+has to pass.
 """
 
 import pandas as pd
@@ -145,6 +158,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     # ticker's EMA10/EMA20 values are display-only and never gate a match.
     ema10_now = float(indicators.compute_ema(df["Close"], 10).iloc[today_idx])
     ema20_now = float(indicators.compute_ema(df["Close"], 20).iloc[today_idx])
+    rsi_series = indicators.compute_rsi(df["Close"])
+    rsi_now = float(rsi_series.iloc[today_idx]) if pd.notna(rsi_series.iloc[today_idx]) else None
 
     found = _find_previous_high(df, today_idx, params)
     if found is None:
@@ -178,6 +193,28 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     resistance_date = df.index[resistance_idx].strftime("%Y-%m-%d")
     resistance_age_days = today_idx - resistance_idx
 
+    # RSI momentum note (informational, never a gate): compares today's
+    # RSI to RSI back when the original high was made -- not "is RSI
+    # overbought" but "is this attempt on the same level backed by as
+    # much strength as the original move." A rising/holding price with
+    # weaker RSI than the original high (bearish divergence relative to
+    # that specific level) is a real caution sign worth surfacing, but on
+    # its own it's a probabilistic warning, not a reason to exclude a
+    # match outright -- divergence can persist through further strength
+    # in a genuine trend, so this strategy still treats it as a note in
+    # "Why Qualified," not a condition a ticker has to pass.
+    rsi_at_resistance = float(rsi_series.iloc[resistance_idx]) if pd.notna(rsi_series.iloc[resistance_idx]) else None
+    if rsi_now is not None and rsi_at_resistance is not None:
+        if rsi_now < rsi_at_resistance:
+            rsi_note = (
+                f"⚠️ Weaker momentum than the original high: RSI {rsi_now:.1f} now vs {rsi_at_resistance:.1f} "
+                f"on {resistance_date} -- rising price on less relative strength, not necessarily a reversal"
+            )
+        else:
+            rsi_note = f"ℹ️ Momentum at least as strong as the original high: RSI {rsi_now:.1f} now vs {rsi_at_resistance:.1f} on {resistance_date}"
+    else:
+        rsi_note = "ℹ️ Not enough data to compare today's RSI against the original high"
+
     # Buy Level: the exact price a close needs to clear resistance by the
     # strategy's own breakout_min_pct buffer -- shown as a distinct line
     # from the raw resistance level so "buy above this price" is a single
@@ -201,6 +238,8 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "Buy Level": round(buy_level, 2),
         "EMA10": round(ema10_now, 2),
         "EMA20": round(ema20_now, 2),
+        "RSI": round(rsi_now, 1) if rsi_now is not None else None,
+        "RSI Note": rsi_note,
         "Pullback Low": round(pullback_low, 2),
         "Pullback %": round(pullback_pct, 2),
         "Momentum %": round(momentum_pct, 2),
@@ -232,6 +271,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
                 )
             else:
                 why.append("✗ Not enough prior sessions to compute the volume-confirmation ratio")
+            why.append(rsi_note)
             return {
                 **base_row,
                 "Setup Status": status,
@@ -250,6 +290,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
                 f"✓ Close (₹{price_today:.2f}) is {distance_pct:.2f}% below that resistance -- "
                 f"approaching, not yet broken out",
                 f"🎯 Buy Level: ₹{buy_level:.2f} -- a close above this price would confirm the breakout",
+                rsi_note,
             ]
             return {
                 **base_row,
@@ -263,7 +304,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
 
 _DISPLAY_COLUMNS = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "Resistance Level", "Buy Level", "EMA10", "EMA20", "Resistance Date", "Pullback Low", "Pullback %",
+    "Resistance Level", "Buy Level", "EMA10", "EMA20", "RSI", "Resistance Date", "Pullback Low", "Pullback %",
     "Momentum %", "% Below Resistance", "Volume Ratio", "Why Qualified",
 ]
 

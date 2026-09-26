@@ -686,20 +686,34 @@ display-only. This strategy's own rules are entirely about the
 previous-high/pullback/recovery/breakout structure, so a ticker's
 EMA10/EMA20 values never gate a match here.
 
+**RSI momentum note** (added after a discussion on whether rising
+price on flat/falling RSI -- bearish divergence -- should exclude a
+stock; the conclusion was no, on its own: RSI measures the strength of
+recent gains/losses, not price level, so a stock can keep climbing on
+relatively less strength without that proving an imminent reversal --
+divergence is a real but probabilistic caution sign, not proof). Rather
+than gate on it, `evaluate_ticker` compares today's RSI(14) to RSI back
+when the *specific* previous high being challenged was made, and adds a
+plain-language ⚠️/ℹ️ line to "Why Qualified" (e.g. "Weaker momentum than
+the original high: RSI 73.7 now vs 79.3 on 2026-06-19") -- a caution
+flag the user weighs themselves, never a condition a ticker has to
+pass. Also surfaced as its own numeric "RSI" column.
+
 **Results tables**: three tabs (Pre-Breakout Watchlist / Confirmed
 Breakouts / Breakout — Volume Unconfirmed), each with Symbol, Company
 Name, Setup Status, Signal Date, Current Price, Resistance Level
-("Previous High"), Buy Level, EMA10, EMA20, Resistance Date, Pullback
-Low, Pullback %, Momentum %, Distance %, Volume Ratio. Selecting a row
-sets a page-local `st.session_state.rbo_selected_ticker` (like
-`rc_selected_ticker`), not the shared detail panel, and loads
+("Previous High"), Buy Level, EMA10, EMA20, RSI, Resistance Date,
+Pullback Low, Pullback %, Momentum %, Distance %, Volume Ratio.
+Selecting a row sets a page-local `st.session_state.rbo_selected_ticker`
+(like `rc_selected_ticker`), not the shared detail panel, and loads
 `resistance_breakout.build_breakout_chart()`: a 2-row Plotly subplot
 (price + EMA10/EMA20 dotted lines + a flat previous-high resistance
 line drawn from the previous-high candle to the signal candle + the Buy
 Level as a green dashed line, with ▽/△ markers for the previous high
 and pullback low / Volume, with the signal day's bar highlighted
 orange) so "visibly higher volume" is literally visible at a glance --
-plus the row's own "Why Qualified" string underneath.
+plus the row's own "Why Qualified" string (including the RSI momentum
+note) underneath.
 
 ## Seventh strategy: "Triple EMA Golden Cross"
 
