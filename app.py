@@ -2340,7 +2340,7 @@ if nav_page == "Bullish Recovery Above EMAs":
 
 _RBO_COLUMN_ORDER = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "Resistance Level", "Resistance Date", "Pullback Low", "Pullback %", "Momentum %",
+    "Resistance Level", "Buy Level", "Resistance Date", "Pullback Low", "Pullback %", "Momentum %",
     "% Below Resistance", "Volume Ratio",
 ]
 _RBO_COLUMN_CONFIG = {
@@ -2351,6 +2351,7 @@ _RBO_COLUMN_CONFIG = {
     "Signal Date": st.column_config.TextColumn("Signal Date", width="small"),
     "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
     "Resistance Level": st.column_config.NumberColumn("Previous High", format="₹%.2f"),
+    "Buy Level": st.column_config.NumberColumn("Buy Level", format="₹%.2f"),
     "Resistance Date": st.column_config.TextColumn("High Date", width="small"),
     "Pullback Low": st.column_config.NumberColumn("Pullback Low", format="₹%.2f"),
     "Pullback %": st.column_config.NumberColumn("Pullback %", format="%.1f%%"),
@@ -2385,8 +2386,10 @@ if nav_page == "Resistance Breakout":
         "(Confirmed Breakout / Breakout — Volume Unconfirmed). This is NOT a confirmed cup-and-handle "
         "pattern -- that requires a distinct handle before the breakout, which isn't checked for here; the "
         "recovery leg may simply look cup-shaped. A minimum-momentum gate excludes stocks just sitting "
-        "flat/consolidating near the previous high with no real forward movement behind them. Rule-based "
-        "scanner matches, not guaranteed profitable recommendations."
+        "flat/consolidating near the previous high with no real forward movement behind them. Each match "
+        "shows a **Buy Level** (resistance + the breakout buffer -- the exact price a close needs to clear "
+        "to confirm the breakout), also drawn as a green line on the chart. Rule-based scanner matches, "
+        "not guaranteed profitable recommendations."
     )
 
     rbo_universe_choice = st.radio(
@@ -2537,11 +2540,13 @@ if nav_page == "Resistance Breakout":
                 rbo_fig = resistance_breakout.build_breakout_chart(
                     rbo_chart_df, rbo_res_idx, float(rbo_row["Resistance Level"]),
                     rbo_pb_idx, float(rbo_row["Pullback Low"]), rbo_sig_idx, rbo_ticker,
+                    buy_level=float(rbo_row["Buy Level"]),
                 )
                 st.plotly_chart(rbo_fig, width="stretch")
                 st.caption(
-                    "Red ▽ = previous high (resistance). Green △ = pullback low. Orange marker = the signal "
-                    "candle; its Volume bar is also highlighted orange, so a volume spike is visible at a glance."
+                    "Red ▽ = previous high (resistance). Green dashed line = Buy Level (resistance + breakout "
+                    "buffer). Green △ = pullback low. Orange marker = the signal candle; its Volume bar is "
+                    "also highlighted orange, so a volume spike is visible at a glance."
                 )
                 st.markdown(f"**Why qualified:**\n\n{rbo_row['Why Qualified']}")
 

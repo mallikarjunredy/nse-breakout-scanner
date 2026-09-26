@@ -39,6 +39,15 @@ sessions for a ticker to qualify at all, in *either* tier. This is a
 simple rate-of-change check, not a trend-quality score -- it only asks
 "has this actually moved recently," which is enough to separate a fresh
 recovery from a stock stuck oscillating sideways.
+
+Buy Level (added at the user's request): `resistance * (1 +
+breakout_min_pct / 100)` -- the exact price a close needs to clear to
+confirm the breakout, i.e. the same threshold `evaluate_ticker` already
+uses internally, now surfaced as its own column and chart line (green,
+dashed) rather than something the user has to compute themselves from
+the resistance level and the buffer %. Shown for every match in both
+tiers -- for the watchlist it's "buy above this price to confirm";
+for a breakout it's the exact level that was cleared.
 """
 
 import pandas as pd
@@ -154,6 +163,13 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     resistance_date = df.index[resistance_idx].strftime("%Y-%m-%d")
     resistance_age_days = today_idx - resistance_idx
 
+    # Buy Level: the exact price a close needs to clear resistance by the
+    # strategy's own breakout_min_pct buffer -- shown as a distinct line
+    # from the raw resistance level so "buy above this price" is a single
+    # concrete number, not something the user has to compute themselves
+    # from the resistance level and the buffer %.
+    buy_level = resistance * (1 + params["breakout_min_pct"] / 100)
+
     vol_period = params["breakout_volume_avg_period"]
     vol_ratio_today = None
     if today_idx - vol_period >= 0:
@@ -167,6 +183,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
         "Current Price": round(price_today, 2),
         "Resistance Level": round(resistance, 2),
         "Resistance Date": resistance_date,
+        "Buy Level": round(buy_level, 2),
         "Pullback Low": round(pullback_low, 2),
         "Pullback %": round(pullback_pct, 2),
         "Momentum %": round(momentum_pct, 2),
@@ -179,16 +196,16 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
     # --- Breakout — far right: close crosses the old high, on volume -----
     if today_idx >= 1:
         price_prev = float(df["Close"].iloc[today_idx - 1])
-        min_clearance = resistance * params["breakout_min_pct"] / 100
-        if price_prev <= resistance + min_clearance < price_today:
+        if price_prev <= buy_level < price_today:
             confirmed = vol_ratio_today is not None and vol_ratio_today >= params["breakout_volume_mult"]
             status = "Confirmed Breakout" if confirmed else "Breakout — Volume Unconfirmed"
             why = [
                 f"✓ Previous high found on {resistance_date} at ₹{resistance:.2f} ({resistance_age_days} sessions ago)",
                 f"✓ Pulled back {pullback_pct:.1f}% to a low of ₹{pullback_low:.2f} before recovering",
                 f"✓ Trending, not flat: close is up {momentum_pct:.1f}% over the last {mom_lb} sessions",
-                f"✓ Yesterday's close (₹{price_prev:.2f}) was at/below resistance",
-                f"✓ Today's close (₹{price_today:.2f}) cleared resistance by more than {params['breakout_min_pct']:.1f}%",
+                f"✓ Yesterday's close (₹{price_prev:.2f}) was at/below the ₹{buy_level:.2f} Buy Level",
+                f"✓ Today's close (₹{price_today:.2f}) cleared the ₹{buy_level:.2f} Buy Level "
+                f"(resistance + {params['breakout_min_pct']:.1f}%)",
             ]
             if vol_ratio_today is not None:
                 tick = "✓" if confirmed else "✗"
@@ -215,6 +232,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
                 f"✓ Trending, not flat: close is up {momentum_pct:.1f}% over the last {mom_lb} sessions",
                 f"✓ Close (₹{price_today:.2f}) is {distance_pct:.2f}% below that resistance -- "
                 f"approaching, not yet broken out",
+                f"🎯 Buy Level: ₹{buy_level:.2f} -- a close above this price would confirm the breakout",
             ]
             return {
                 **base_row,
@@ -228,7 +246,7 @@ def evaluate_ticker(ticker: str, df: pd.DataFrame, params: dict, min_price: floa
 
 _DISPLAY_COLUMNS = [
     "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
-    "Resistance Level", "Resistance Date", "Pullback Low", "Pullback %", "Momentum %",
+    "Resistance Level", "Buy Level", "Resistance Date", "Pullback Low", "Pullback %", "Momentum %",
     "% Below Resistance", "Volume Ratio", "Why Qualified",
 ]
 
@@ -304,11 +322,15 @@ def scan_resistance_breakout(
 def build_breakout_chart(
     df: pd.DataFrame, resistance_idx: int, resistance_val: float,
     pullback_idx: int, pullback_val: float, signal_idx: int, ticker: str,
+    buy_level: float | None = None,
 ):
     """Candlestick + the flat previous-high resistance line (drawn from
-    the previous-high candle out to the signal candle) + previous-high /
-    pullback-low markers + a Volume panel with the signal day's bar
-    highlighted, so "visibly higher volume" is literally visible.
+    the previous-high candle out to the signal candle) + a green Buy
+    Level line (resistance + the strategy's own breakout buffer -- the
+    exact price a close needs to clear to confirm the breakout) +
+    previous-high / pullback-low markers + a Volume panel with the
+    signal day's bar highlighted, so "visibly higher volume" is
+    literally visible.
     """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -334,6 +356,11 @@ def build_breakout_chart(
         x=[df.index[resistance_idx]], y=[resistance_val], mode="markers", name="Previous High",
         marker=dict(color="#FF6B6B", size=10, symbol="triangle-down"),
     ), row=1, col=1)
+    if buy_level is not None:
+        fig.add_trace(go.Scatter(
+            x=[df.index[resistance_idx], df.index[signal_idx]], y=[buy_level, buy_level],
+            mode="lines", name="Buy Level", line=dict(color="#3ECF8E", width=2, dash="dash"),
+        ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=[df.index[pullback_idx]], y=[pullback_val], mode="markers", name="Pullback Low",
         marker=dict(color="#3ECF8E", size=10, symbol="triangle-up"),
