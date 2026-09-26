@@ -924,6 +924,42 @@ approaching it), which this strategy's fresh-breakout gate requires by
 construction; it's expected to surface here once that close is
 confirmed above ₹3,082 on volume.
 
+**Performance Tracker** (a fourth tab, added at the user's request,
+explicitly for testing/validation -- "as we're choosing these stocks
+today, how do they actually perform going forward"): a plain price-
+since-entry log, `src/breakout_flag_tracker.py`
+(`data/breakout_flag_tracker.json`), NOT a backtest or paper-trading
+engine (see the Trend + Consolidation Backtest page for that, with
+simulated stops/targets/position sizing) -- it only remembers the
+signal date and entry price for whichever matches the user chooses to
+snapshot, and reports how price has moved since, using a fresh quote
+each time the tab is viewed. The "Signal Date" saved is the strategy's
+own Signal Date field -- already the EOD date of the candle that
+qualified (naturally "yesterday" from the user's own "before market
+open" framing, since a scan run before today's session opens is
+necessarily evaluating yesterday's completed candle), not the calendar
+date the button happened to be clicked.
+
+- "➕ Track Today's N Matches" (`add_matches()`) snapshots every row
+  currently in all three result tables (Flag Watchlist / Confirmed
+  Continuation / Continuation — Volume Unconfirmed combined) as one
+  entry each -- ticker, company name, setup status, signal date, entry
+  price (that row's Current Price), plus an IST timestamp for when it
+  was added. Skips a `(ticker, signal_date)` pair already tracked, so
+  clicking the button again on the same day's scan doesn't duplicate
+  entries -- this is what makes it safe to click repeatedly.
+- The tab's table (`get_performance()`) fetches one fresh
+  `scanner.download_history()` quote per tracked ticker (independent of
+  whatever scan result happens to be cached) and shows Entry Price,
+  Current Price, Change %, Days Since Signal, and Tracked Since for
+  every entry ever added, oldest signal dates last. A ticker whose
+  fresh price can't be fetched right now shows N/A rather than a stale
+  or fabricated number.
+- "🗑️ Clear Tracker" (`clear()`) wipes the whole log -- gated behind a
+  "Confirm clear" checkbox (unchecked by default) so it can't be hit by
+  accident, matching this app's general care around destructive
+  actions.
+
 ## Home page layout: terminal-style split
 
 Top to bottom:

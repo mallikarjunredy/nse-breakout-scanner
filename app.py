@@ -16,9 +16,9 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 
 from src import (
-    breakout_flag, bullish_recovery, config, deep_dive, detail, indicators, market_overview, pre_breakout,
-    resistance_breakout, rising_channel, scan_history, scanner, trend_consolidation, triple_ema_golden_cross,
-    watchlist,
+    breakout_flag, breakout_flag_tracker, bullish_recovery, config, deep_dive, detail, indicators,
+    market_overview, pre_breakout, resistance_breakout, rising_channel, scan_history, scanner,
+    trend_consolidation, triple_ema_golden_cross, watchlist,
 )
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
@@ -2962,10 +2962,12 @@ if nav_page == "Breakout Flag Continuation":
     confirmed_df_bf = result_bf["confirmed_continuation"]
     unconfirmed_df_bf = result_bf["volume_unconfirmed"]
 
-    tab_watchlist_bf, tab_confirmed_bf, tab_unconfirmed_bf = st.tabs([
+    bf_tracked_entries = breakout_flag_tracker.load()
+    tab_watchlist_bf, tab_confirmed_bf, tab_unconfirmed_bf, tab_tracker_bf = st.tabs([
         f"🚩 Flag Watchlist ({len(watchlist_df_bf)})",
         f"🚀 Confirmed Continuation ({len(confirmed_df_bf)})",
         f"⚠️ Continuation — Volume Unconfirmed ({len(unconfirmed_df_bf)})",
+        f"📊 Performance Tracker ({len(bf_tracked_entries)})",
     ])
     with tab_watchlist_bf:
         st.caption("A fresh volume breakout, a shallow pullback still holding above resistance -- watching for a resumption.")
@@ -2976,6 +2978,46 @@ if nav_page == "Breakout Flag Continuation":
     with tab_unconfirmed_bf:
         st.caption("Same price continuation, but volume didn't confirm it -- treat with extra caution.")
         _render_bf_tab(unconfirmed_df_bf, "bf_unconfirmed")
+    with tab_tracker_bf:
+        st.caption(
+            "For testing/validation: snapshot today's matches (signal date = the EOD candle date they "
+            "qualified on) with their entry price, then come back on later days to see how they actually "
+            "performed -- a plain price-since-entry log, not a simulated backtest (see the Trend + "
+            "Consolidation Backtest page for that, with stops/targets/position sizing)."
+        )
+        bf_all_matches = pd.concat([watchlist_df_bf, confirmed_df_bf, unconfirmed_df_bf], ignore_index=True)
+        bf_track_col, bf_clear_col = st.columns([2, 1])
+        with bf_track_col:
+            if st.button(
+                f"➕ Track Today's {len(bf_all_matches)} Matches", key="bf_track_matches",
+                disabled=bf_all_matches.empty,
+            ):
+                bf_added = breakout_flag_tracker.add_matches(bf_all_matches.to_dict("records"))
+                if bf_added:
+                    st.success(f"Added {bf_added} new entr{'y' if bf_added == 1 else 'ies'} to the tracker.")
+                else:
+                    st.info("Nothing new to add -- today's matches are already tracked.")
+                st.rerun()
+        with bf_clear_col:
+            bf_confirm_clear = st.checkbox("Confirm clear", key="bf_confirm_clear")
+            if st.button("🗑️ Clear Tracker", key="bf_clear_tracker", disabled=not bf_confirm_clear):
+                breakout_flag_tracker.clear()
+                st.rerun()
+
+        if not bf_tracked_entries:
+            st.info("Nothing tracked yet -- click \"➕ Track Today's Matches\" above to snapshot the current scan's results.")
+        else:
+            with st.spinner("Fetching current prices for tracked stocks..."):
+                bf_perf_df = breakout_flag_tracker.get_performance()
+            _export_buttons(bf_perf_df, "breakout_flag_tracker", "bf_tracker")
+            st.dataframe(
+                bf_perf_df, hide_index=True, width="stretch",
+                column_config={
+                    "Entry Price": st.column_config.NumberColumn("Entry Price", format="₹%.2f"),
+                    "Current Price": st.column_config.NumberColumn("Current Price", format="₹%.2f"),
+                    "Change %": st.column_config.NumberColumn("Change %", format="%+.2f%%"),
+                },
+            )
 
     st.divider()
     st.markdown("#### 📊 Selected Candidate Chart")

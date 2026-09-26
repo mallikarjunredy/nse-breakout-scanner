@@ -7,6 +7,7 @@ data/*.csv
 data/ca_bundle.pem
 data/watchlist.json
 data/scan_history.json
+data/breakout_flag_tracker.json
 !data/.gitkeep
 streamlit_out.log
 streamlit_err.log
