@@ -205,6 +205,13 @@ st.markdown(
         box-shadow: 0 6px 20px rgba(0,0,0,0.3);
     }
     button[data-baseweb="tab"] { border-radius: 10px 10px 0 0; }
+    div[class*="st-key-tape_btn_"] button {
+        padding: 0.3rem 0.5rem; min-height: 0;
+    }
+    div[class*="st-key-tape_btn_"] button p {
+        font-size: 0.72rem; line-height: 1.3; margin: 0; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis;
+    }
     div[data-testid="stExpander"] {
         border: 1px solid rgba(255,255,255,0.08);
         border-radius: 12px;
@@ -388,7 +395,13 @@ def render_ticker_tape():
         return
 
     st.caption("👆 Click an instrument to load its chart")
-    cols_per_row = 6
+    # A compact, single-line label (name + price + change% all on one row)
+    # instead of the old two-line label -- these chips only need to be
+    # glanceable, not full cards, and the old taller buttons ate a large
+    # chunk of vertical space above the fold for what is just an index/
+    # watchlist strip. cols_per_row is bumped from 6 to 9 to match --
+    # narrower, shorter chips fit more per row before wrapping.
+    cols_per_row = 9
     for row_start in range(0, len(instruments), cols_per_row):
         row_items = instruments[row_start:row_start + cols_per_row]
         cols = st.columns(len(row_items))
@@ -396,8 +409,8 @@ def render_ticker_tape():
             arrow = "▲" if inst["change_pct"] >= 0 else "▼"
             color = "green" if inst["change_pct"] >= 0 else "red"
             btn_label = (
-                f'**{inst["label"]}**  \n{inst["price_str"]}  '
-                f':{color}[{arrow} {abs(inst["change_pct"]):.2f}%]'
+                f'**{inst["label"]}** {inst["price_str"]} '
+                f':{color}[{arrow}{abs(inst["change_pct"]):.2f}%]'
             )
             is_active = inst["chart_symbol"] == st.session_state.chart_symbol
             with col:

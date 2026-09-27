@@ -506,20 +506,33 @@ provides one.
 `render_ticker_tape()` (in `app.py`, defined right after `watchlist_tickers
 = watchlist.load()` since it's called immediately below the header --
 before the page-routing functions further down the file are even defined)
-renders a horizontally-scrollable strip (`.ticker-tape-wrap`/`.ticker-chip`
-CSS) below the header **on every page**: Nifty 50, Bank Nifty, Sensex
-first (`market_overview.get_indices_snapshot()`), then the user's own
-watchlist tickers (`market_overview.get_ticker_tape_quotes()`), green/red
-per instrument via `.tt-positive`/`.tt-negative`. Both queries are wrapped
-in `_get_ticker_tape_data()`, a `@st.cache_data(ttl=300)` function keyed on
-`tuple(watchlist_tickers)` -- a short TTL independent of
-`config.SCAN_CACHE_TTL_SECONDS`, since the tape doesn't need to wait on a
-full universe scan to refresh. The strip itself is plain, non-clickable
-HTML (see the "fake-clickable HTML" bug class above); a separate
-`st.selectbox` ("Jump chart to instrument", key `ticker_tape_jump`) right
-below it is the actual click-to-load-chart control -- picking a name
-resolves it via `_resolve_chart_symbol()` and sets
-`st.session_state.chart_symbol`, then reruns.
+renders a row of real `st.button`s below the header **on every page**:
+Nifty 50, Bank Nifty, Sensex first (`market_overview.get_indices_snapshot()`),
+then the user's own watchlist tickers (`market_overview.get_ticker_tape_quotes()`).
+Each instrument is a genuine clickable button (not styled-to-look-clickable
+static HTML, a known bug class in this app -- see above) -- clicking one
+sets `st.session_state.chart_symbol` and reruns, loading that instrument in
+the Home chart pane directly; there is no separate "jump to instrument"
+selectbox. Both underlying queries are wrapped in `_get_ticker_tape_data()`,
+a `@st.cache_data(ttl=300)` function keyed on `tuple(watchlist_tickers)` --
+a short TTL independent of `config.SCAN_CACHE_TTL_SECONDS`, since the tape
+doesn't need to wait on a full universe scan to refresh. `cols_per_row`
+(9) sets how many buttons share a row before wrapping; Streamlit can't
+scroll a row of buttons horizontally the way plain HTML can, so a wide
+watchlist wraps onto additional rows instead of scrolling -- the
+practical-version tradeoff for this control being genuinely clickable
+rather than a static, non-functional strip.
+
+**Compact single-line chips** (the user flagged the original two-line
+button label -- name on one line, price and change% on a second -- as
+taking up an outsized share of the page above the fold, just to show a
+handful of indices and watchlist tickers): the label is now a single
+line (`**Name** Price :color[▲0.34%]`), and `div[class*="st-key-tape_btn_"]`
+CSS (matching on Streamlit's per-widget-key class, present since
+Streamlit 1.38) trims the button's padding/min-height and clamps its
+text to one non-wrapping, ellipsis-truncated line. This roughly halves
+the tape's vertical footprint versus the old two-line chips, without
+changing what each button does.
 
 ## Fifth strategy: "Bullish Recovery Above EMAs"
 
