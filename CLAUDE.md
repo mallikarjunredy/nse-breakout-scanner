@@ -964,12 +964,17 @@ date the button happened to be clicked.
 
 Top to bottom:
 
-1. `render_home_header()` -- welcome message, the "Discipline today,
-   better trades tomorrow" tagline, and a meta line showing the data
-   source plus the *scan* timestamp and the underlying *price data*
-   date **separately**, both in IST. If the universe's last daily
-   candle's date equals today's IST date *and* the market is currently
-   open, an inline warning notes that candle may still be forming.
+1. `render_home_header()` -- no visible greeting or banner (the earlier
+   "👋 Welcome, Mallikarjun" hero line was removed at the user's request:
+   it left a mostly-empty full-width row above the dashboard/chart split
+   for no functional benefit, so it -- and the now-unused
+   `.home-hero*` CSS -- were deleted outright, and the chart pane's
+   height (`_build_chart_figure()`) was increased (460/560 ->
+   540/640px, no-RSI/with-RSI) to put that reclaimed vertical space
+   toward the chart instead). This function still only surfaces
+   conditional data-freshness messaging: an `st.error` if the day's scan
+   couldn't retrieve any price data, or an `st.caption` nudge to re-run
+   the scan if the cache is past its TTL. Nothing else renders here.
 2. A resizable two-column split (`st.slider("↔️ Dashboard / Chart width",
    key="home_split_pct")` driving `st.columns([split_pct, 100 -
    split_pct])`, default 50/50, 30-70 range in steps of 5) -- the

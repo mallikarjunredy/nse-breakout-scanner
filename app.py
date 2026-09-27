@@ -234,10 +234,6 @@ st.markdown(
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
     .meta-text { color: #B7C6DE; font-size: 0.75rem; text-align: right; line-height: 1.3; }
-    .home-hero { padding: 0.7rem 1rem 0.5rem 1rem; margin-bottom: 0.3rem; }
-    .home-hero-title { font-size: 1.5rem; font-weight: 800; color: #EAF2FA; line-height: 1.2; }
-    .home-hero-sub { font-size: 0.95rem; color: #CFE3F5; margin-top: 0.15rem; }
-    .home-hero-tagline { font-size: 0.85rem; color: #6FE3D6; margin-top: 0.3rem; }
     .condition-pill {
         display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.9rem; border-radius: 10px;
         background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
@@ -631,12 +627,6 @@ def _select_from_watchlist_table(df: pd.DataFrame, key: str):
 # ---------------------------------------------------------------------------
 
 def render_home_header():
-    st.markdown(
-        '<div class="home-hero">'
-        '<div class="home-hero-title">👋 Welcome, Mallikarjun</div>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
     if result["scanned"] == 0:
         st.error(
             "This scan couldn't retrieve any price data for the Nifty 500 universe — likely a temporary "
@@ -1247,7 +1237,7 @@ def _build_chart_figure(df: pd.DataFrame, symbol_label: str, chart_type: str, sh
         fig.update_yaxes(title_text="RSI(14)", range=[0, 100], row=2, col=1)
 
     fig.update_layout(
-        template="plotly_white", height=560 if show_rsi else 460,
+        template="plotly_white", height=640 if show_rsi else 540,
         margin=dict(l=10, r=55, t=10, b=10), paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
         xaxis_rangeslider_visible=False, showlegend=False, font=dict(color="#1A1A1A"),
         dragmode="pan",
@@ -1390,7 +1380,6 @@ def render_footer(scan_ts: float | None = None):
 
 if nav_page == "Home":
     render_home_header()
-    st.write("")
 
     # Default to the #1 candidate so the analysis section below (and the
     # detail panel) is never empty -- the user can still pick any other row.
