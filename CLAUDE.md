@@ -501,6 +501,21 @@ religious iconography without the user's explicit sign-off wasn't
 appropriate. Swap it for a real supplied icon file if/when the user
 provides one.
 
+**Reclaiming dead layout space above the header** (the user pointed out,
+via a browser-inspector screenshot, several genuinely empty boxes above
+the fold): Streamlit's own default toolbar
+(`header[data-testid="stHeader"]`, the bar carrying the "Deploy"/"⋮"
+menu) reserves a tall, mostly-blank strip above this app's custom
+header by default -- shrunk via CSS to `height: 2.5rem` (kept, not
+hidden outright, so Deploy/Settings stay reachable), with
+`div.block-container`'s `padding-top` matched to the same 2.5rem so the
+custom header starts right below it instead of leaving a gap. Separately,
+the data-source disclaimer's `st.popover("📡", ...)` used to be wrapped
+in `disclaimer_col, _ = st.columns([0.05, 0.95])` -- reserving a
+full-width, entirely empty second column for no reason, since nothing
+was ever rendered into it. Removed that wrapper; a bare `st.popover()`
+is already compact/content-width on its own.
+
 ## Top ticker tape
 
 `render_ticker_tape()` (in `app.py`, defined right after `watchlist_tickers

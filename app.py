@@ -188,6 +188,13 @@ st.markdown(
         background: linear-gradient(160deg, #060b18 0%, #0b132b 45%, #0d1a33 100%);
         background-attachment: fixed;
     }
+    /* Streamlit's own default toolbar (Deploy/Settings) reserves a tall,
+       mostly-blank strip above this app's own custom header by default --
+       shrink it (rather than hiding it outright, so Deploy/Settings stay
+       reachable) and shrink the page's top padding to match, so the
+       custom header starts right below it instead of leaving a gap. */
+    header[data-testid="stHeader"] { height: 2.5rem; background: transparent; }
+    div.block-container { padding-top: 2.5rem; }
     section[data-testid="stSidebar"] {
         background: #0a1024;
         border-right: 1px solid rgba(79,209,232,0.12);
@@ -464,14 +471,15 @@ with h_right:
 # the disclosure text still has to be reachable on every page (see
 # CLAUDE.md's "never claim real-time/official NSE data" rule), just one
 # click away via this popover rather than taking up a full line by default.
-disclaimer_col, _ = st.columns([0.05, 0.95])
-with disclaimer_col:
-    with st.popover("📡", help="Data source & market status disclosure"):
-        st.caption(
-            "**Data Source:** Yahoo Finance — delayed / cached / EOD data, "
-            "not an official NSE real-time feed.\n\n"
-            "**Market status** reflects trading hours only, not exchange holidays."
-        )
+# A bare st.popover() (no wrapping st.columns) stays compact/content-width
+# on its own -- wrapping it in a [0.05, 0.95] column split, as this used
+# to do, reserved a full-width, entirely empty second column for no reason.
+with st.popover("📡", help="Data source & market status disclosure"):
+    st.caption(
+        "**Data Source:** Yahoo Finance — delayed / cached / EOD data, "
+        "not an official NSE real-time feed.\n\n"
+        "**Market status** reflects trading hours only, not exchange holidays."
+    )
 
 render_ticker_tape()
 
