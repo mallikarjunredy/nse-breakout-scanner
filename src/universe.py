@@ -113,3 +113,68 @@ def get_nse_all() -> tuple[list[str], str]:
     """
     symbols, source = _get_universe("nse_all", _fetch_nse_all_live, _FALLBACK_NIFTY500)
     return [f"{s}.NS" for s in symbols], source
+
+
+# NSE's own official constituent CSVs for the 12 sectoral indices shown
+# on the Home page's "Market and Sectors" card -- confirmed live against
+# NSE's archives (each returns real, correctly-sized constituent lists,
+# e.g. NIFTY Bank -> 14 symbols, NIFTY IT -> 10) rather than assumed from
+# naming convention alone. Note NIFTY Private Bank's file uses an
+# underscore ("ind_nifty_privatebanklist.csv") where every other sector
+# here doesn't -- that's NSE's own inconsistency, not a typo.
+_SECTOR_INDEX_FILES = {
+    "NIFTY Bank": "ind_niftybanklist.csv",
+    "NIFTY IT": "ind_niftyitlist.csv",
+    "NIFTY Auto": "ind_niftyautolist.csv",
+    "NIFTY Pharma": "ind_niftypharmalist.csv",
+    "NIFTY FMCG": "ind_niftyfmcglist.csv",
+    "NIFTY Metal": "ind_niftymetallist.csv",
+    "NIFTY Realty": "ind_niftyrealtylist.csv",
+    "NIFTY Media": "ind_niftymedialist.csv",
+    "NIFTY PSU Bank": "ind_niftypsubanklist.csv",
+    "NIFTY Private Bank": "ind_nifty_privatebanklist.csv",
+    "NIFTY Financial Services": "ind_niftyfinancelist.csv",
+    "NIFTY Healthcare": "ind_niftyhealthcarelist.csv",
+}
+
+
+def _fetch_sector_constituents_live(sector_name: str) -> list[str]:
+    filename = _SECTOR_INDEX_FILES[sector_name]
+    url = f"https://archives.nseindia.com/content/indices/{filename}"
+    resp = requests.get(url, headers=_HEADERS, timeout=15)
+    resp.raise_for_status()
+    df = pd.read_csv(io.StringIO(resp.text))
+    symbols = df["Symbol"].dropna().astype(str).str.strip().tolist()
+    if not symbols:
+        raise ValueError(f"Empty constituent list for {sector_name} from NSE archives")
+    return symbols
+
+
+def get_sector_constituents(sector_name: str) -> tuple[list[str], str] | None:
+    """Returns (['AXISBANK.NS', ...], source_description) for one of the
+    12 sectoral indices in `_SECTOR_INDEX_FILES`, or `None` if the name
+    isn't one of those (or NSE's list can't be fetched right now and
+    there's no usable cache). Deliberately has no built-in fallback list
+    the way `get_nifty_500`/`get_nse_all` do -- there's no honest
+    stand-in for "the exact member stocks of this one sectoral index,"
+    so an unavailable live fetch is reported as unavailable rather than
+    guessed at.
+    """
+    if sector_name not in _SECTOR_INDEX_FILES:
+        return None
+    cache_name = f"sector_{sector_name.lower().replace(' ', '_')}"
+    cached = _read_cache(cache_name)
+    if cached is not None and cached[1] < _CACHE_MAX_AGE_SECONDS:
+        return [f"{s}.NS" for s in cached[0]], "cached list (< 7 days old)"
+
+    try:
+        symbols = _fetch_sector_constituents_live(sector_name)
+        _write_cache(cache_name, symbols)
+        return [f"{s}.NS" for s in symbols], "freshly fetched"
+    except Exception:
+        pass
+
+    if cached is not None:
+        return [f"{s}.NS" for s in cached[0]], "stale cached list (live fetch failed)"
+
+    return None

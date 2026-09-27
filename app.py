@@ -300,8 +300,19 @@ st.markdown(
     .mkt-sectors-row {
         display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
         padding: 0.5rem 0.9rem; border-bottom: 1px solid #EFEFEF; flex-wrap: wrap;
+        background: #FFFFFF; border-radius: 8px 0 0 8px;
     }
-    .mkt-sectors-row:last-child { border-bottom: none; }
+    .mkt-sectors-row:last-child, .mkt-sectors-row-last { border-bottom: none; }
+    .mkt-sectors-subheader-first { padding-top: 0.5rem; }
+    /* The sector "▶" buttons sit right of each white Sectoral row, in a
+       column Streamlit itself doesn't let us re-theme to match -- styled
+       as its own small white/light pill instead of trying to blend the
+       whole row backgrounds together. */
+    div[class*="st-key-sector_btn_"] button {
+        padding: 0.3rem 0; min-height: 0; font-size: 0.85rem;
+        background: #FFFFFF; border: 1px solid #EAEAEA; color: #1A1A1A; border-radius: 0 8px 8px 0;
+    }
+    div[class*="st-key-sector_btn_"] button:hover { background: #F3F3F3; color: #1A1A1A; }
     .mkt-sectors-name { flex: 1 1 38%; font-size: 0.83rem; color: #1A1A1A; font-weight: 500; min-width: 110px; }
     .mkt-sectors-graph { flex: 0 0 auto; display: flex; justify-content: center; }
     .mkt-sectors-value { flex: 0 0 auto; text-align: right; min-width: 88px; }
@@ -694,6 +705,56 @@ def _sparkline_svg(values: list[float], color: str, ref_value: float | None = No
     )
 
 
+def _render_sector_drilldown():
+    """Shown right under the Sectoral list once the user clicks a
+    sector's ▶ button -- the real member stocks of that one NSE
+    sectoral index (never a fabricated list; see
+    `market_overview.get_sector_constituent_quotes`), each with a fresh
+    quote. Selecting a row here feeds the same `selected_ticker` every
+    other table in this app uses, so it shows up in the "Selected Stock
+    Analysis" detail panel below, same as any other row click.
+    """
+    sector = st.session_state.get("mkt_selected_sector")
+    if not sector:
+        return
+    with st.container(border=True):
+        head_col, close_col = st.columns([3.2, 0.8])
+        with head_col:
+            st.markdown(
+                '<div class="card-header"><span class="badge-dot" style="background:#4FD1E8;"></span>'
+                f"📊 {sector} — Constituent Stocks</div>",
+                unsafe_allow_html=True,
+            )
+        with close_col:
+            if st.button("✕ Close", key="mkt_sector_drilldown_close", width="stretch"):
+                st.session_state.mkt_selected_sector = None
+                st.rerun()
+
+        with st.spinner(f"Loading {sector} stocks..."):
+            data = market_overview.get_sector_constituent_quotes(sector)
+
+        if not data["available"]:
+            st.warning(f"Couldn't load {sector}'s constituent list from NSE right now. Try again shortly.")
+            return
+        if not data["rows"]:
+            st.caption("No live price data available for these stocks right now.")
+            return
+
+        df = pd.DataFrame(data["rows"])
+        st.caption(f"👆 Click a stock for full analysis below · {len(df)} stocks · NSE official list ({data['source']})")
+        event = st.dataframe(
+            df, hide_index=True, width="stretch",
+            column_config={
+                "Price": st.column_config.NumberColumn(f"Price ({CURRENCY})", format="%.2f"),
+                "Change %": st.column_config.NumberColumn("Change %", format="%.2f%%"),
+            },
+            on_select="rerun", selection_mode="single-row", key="mkt_sector_drilldown_table",
+        )
+        rows_sel = event["selection"]["rows"]
+        if rows_sel:
+            st.session_state.selected_ticker = f"{df.iloc[rows_sel[0]]['Symbol']}.NS"
+
+
 def render_market_and_sectors_card():
     """Replaces the old dark-themed Nifty 50/Bank Nifty/Sensex trio with
     a wider "Market and Sectors" card, built from a user-supplied
@@ -703,14 +764,29 @@ def render_market_and_sectors_card():
     sub-sections -- Broad Based and Sectoral -- each row showing an
     index's name, a small intraday sparkline, its latest value, and its
     change % vs. the previous session's close (green/red, ▲/▼).
+
+    The Sectoral rows are additionally clickable: plain HTML divs can't
+    carry a click handler in Streamlit (see the "fake-clickable HTML"
+    bug class above), so each Sectoral row pairs its HTML visual with a
+    real, adjacent `st.button("▶")` that loads that sector's actual NSE
+    constituent stocks into `_render_sector_drilldown()` below. Broad
+    Based rows stay purely informational -- there's no equivalently
+    small, meaningful "constituents" drill-down for a 100/250/400/500
+    -stock broad-market index the way there is for a ~10-20 stock
+    sectoral index.
     """
     with st.spinner("Loading market and sector indices..."):
         snapshot = market_overview.get_market_and_sectors_snapshot()
 
-    def _row_html(row: dict) -> str:
+    def _row_html(row: dict, extra_class: str = "") -> str:
+        # `extra_class` lets a caller mark a standalone (one-row-per-call)
+        # row as the visual "last" row -- CSS's own :last-child can't do
+        # that here once Sectoral rows each render via their own
+        # st.markdown call (see below), since each call's div is then the
+        # only/"last" child of its own container regardless of position.
         if not row["available"]:
             return (
-                '<div class="mkt-sectors-row">'
+                f'<div class="mkt-sectors-row{extra_class}">'
                 f'<div class="mkt-sectors-name">{row["name"]}</div>'
                 '<div class="mkt-sectors-graph mkt-sectors-na">—</div>'
                 '<div class="mkt-sectors-value"><span class="mkt-sectors-na-text">Data unavailable</span></div>'
@@ -721,7 +797,7 @@ def render_market_and_sectors_card():
         arrow = "▲" if positive else "▼"
         svg = _sparkline_svg(row["sparkline"], color, ref_value=row["prev_close"])
         return (
-            '<div class="mkt-sectors-row">'
+            f'<div class="mkt-sectors-row{extra_class}">'
             f'<div class="mkt-sectors-name">{row["name"]}</div>'
             f'<div class="mkt-sectors-graph">{svg}</div>'
             '<div class="mkt-sectors-value">'
@@ -730,17 +806,37 @@ def render_market_and_sectors_card():
             '</div></div>'
         )
 
-    html = ['<div class="mkt-sectors-wrap">', '<div class="mkt-sectors-header">Market and Sectors</div>']
-    html.append('<div class="mkt-sectors-subheader">Broad Based</div>')
-    html.extend(_row_html(r) for r in snapshot["broad_based"])
-    html.append('<div class="mkt-sectors-subheader">Sectoral</div>')
-    html.extend(_row_html(r) for r in snapshot["sectoral"])
-    html.append("</div>")
-    st.markdown("".join(html), unsafe_allow_html=True)
+    broad_html = ['<div class="mkt-sectors-wrap">', '<div class="mkt-sectors-header">Market and Sectors</div>']
+    broad_html.append('<div class="mkt-sectors-subheader">Broad Based</div>')
+    broad_html.extend(_row_html(r) for r in snapshot["broad_based"])
+    broad_html.append("</div>")
+    st.markdown("".join(broad_html), unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="mkt-sectors-wrap">'
+        '<div class="mkt-sectors-subheader mkt-sectors-subheader-first">Sectoral</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("👆 Click ▶ next to a sector to see its stocks")
+    sectoral_rows = snapshot["sectoral"]
+    for i, row in enumerate(sectoral_rows):
+        extra_class = " mkt-sectors-row-last" if i == len(sectoral_rows) - 1 else ""
+        row_col, btn_col = st.columns([0.87, 0.13])
+        with row_col:
+            st.markdown(_row_html(row, extra_class), unsafe_allow_html=True)
+        with btn_col:
+            if row["available"]:
+                if st.button(
+                    "▶", key=f"sector_btn_{row['name']}", help=f"View {row['name']} stocks", width="stretch",
+                ):
+                    st.session_state.mkt_selected_sector = row["name"]
     st.caption(
         "📡 Yahoo Finance • Delayed / cached data. Sparkline = the most recent session's own intraday "
         "movement; % change is vs. the previous session's close."
     )
+
+    _render_sector_drilldown()
 
 
 def render_watchlist_overview_card():

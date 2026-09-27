@@ -1143,6 +1143,47 @@ workbook. Excel export uses `openpyxl` via `pandas.ExcelWriter`.
     dashed reference line at the previous close's own position (in the
     same normalized scale as the sparkline) shows at a glance whether
     today's session is running above or below where it started.
+  - **Sectoral rows are clickable; Broad Based rows aren't.** Clicking a
+    sector shows that sector's real constituent stocks -- the user's own
+    follow-up request after the card first shipped. Plain HTML divs
+    can't carry a click handler in Streamlit (the "fake-clickable HTML"
+    bug class above), so each Sectoral row renders its existing HTML
+    visual (name/sparkline/value/change%) next to a real, adjacent
+    `st.button("▶", key=f"sector_btn_{name}")`; clicking it sets
+    `st.session_state.mkt_selected_sector` and `_render_sector_drilldown()`
+    (called at the end of `render_market_and_sectors_card()`) shows that
+    sector's stocks in a bordered table right below the card. Broad
+    Based rows were deliberately left non-interactive -- there's no
+    similarly small, meaningful "constituents" view for a 100/250/400/
+    500-stock broad-market index the way there is for a ~10-20 stock
+    sectoral index.
+  - **The constituent list itself is NSE's own official one, not a
+    Yahoo-`.info`-sector guess**: `universe.get_sector_constituents()`
+    fetches (and disk-caches, same 1-week-TTL pattern as
+    `get_nifty_500()`/`get_nse_all()`) each sector's real member-stock
+    CSV from NSE's archives -- e.g. NIFTY Bank ->
+    `ind_niftybanklist.csv`, NIFTY IT -> `ind_niftyitlist.csv` -- via
+    `_SECTOR_INDEX_FILES`, confirmed live against all 12 sectors before
+    building this (each returned a real, correctly-sized list, e.g.
+    NIFTY Bank -> 14 symbols). There's no built-in fallback list here
+    the way the two universe loaders have one: an unavailable live fetch
+    with no usable cache is reported as unavailable
+    (`market_overview.get_sector_constituent_quotes()` returns
+    `{"available": False}`) rather than guessed at. NIFTY Private Bank's
+    file is `ind_nifty_privatebanklist.csv` (with an underscore, unlike
+    every other sector here) -- that's NSE's own inconsistent naming,
+    confirmed by testing, not a typo in this codebase.
+  - Once the constituent list is fetched, `get_sector_constituent_quotes()`
+    calls `scanner.download_history()` (bulk) and `scanner.fetch_candidate_info()`
+    (per-ticker `.info`, for company names) for just that one sector's
+    ~10-20 tickers -- never across all 12 sectors at once, and only when
+    the user actually clicks one, matching this app's existing discipline
+    of never running per-ticker `.info` calls across a whole universe.
+    Selecting a row in the resulting table sets `st.session_state.selected_ticker`,
+    the same session key every other table in this app uses, so it
+    surfaces in Home's "Selected Stock Analysis" detail panel below like
+    any other row click -- no separate detail-view code path was built
+    for this.
 
 ## Windows TLS interception workaround
 

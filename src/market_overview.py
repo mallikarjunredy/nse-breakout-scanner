@@ -7,7 +7,7 @@ data isn't available right now.
 import pandas as pd
 import yfinance as yf
 
-from . import scanner
+from . import scanner, universe
 
 _HOME_INDICES = [
     ("^NSEI", "Nifty 50"),
@@ -189,3 +189,49 @@ def get_market_and_sectors_snapshot() -> dict:
         return available + unavailable
 
     return {"broad_based": _build(_BROAD_BASED_INDICES), "sectoral": _build(_SECTORAL_INDICES)}
+
+
+def get_sector_constituent_quotes(sector_name: str) -> dict:
+    """For the Market and Sectors card's per-sector drill-down (clicking
+    a Sectoral row): the real member stocks of that one NSE sectoral
+    index, from NSE's own official constituent list
+    (`universe.get_sector_constituents`), each with a fresh daily quote.
+    Only called for the one sector the user actually clicked -- never
+    across all 12 at once -- since it needs a bulk OHLCV download plus
+    small per-ticker `.info` lookups for company names.
+
+    Returns `{"available": False}` if the sector name is unrecognized or
+    NSE's constituent list can't be fetched right now and there's no
+    usable cache (never a fabricated stock list); otherwise
+    `{"available": True, "source": ..., "rows": [...]}` with each row a
+    dict of Symbol/Company Name/Price/Change %, sorted by Change %
+    descending. A constituent whose price history can't be downloaded
+    right now is simply omitted from `rows`, not shown with a fabricated
+    price.
+    """
+    result = universe.get_sector_constituents(sector_name)
+    if result is None:
+        return {"available": False}
+    tickers, source = result
+
+    hist = scanner.download_history(tickers)
+    info = scanner.fetch_candidate_info(tickers)
+
+    rows = []
+    for ticker in tickers:
+        df = hist.get(ticker)
+        if df is None or df.empty or len(df) < 2:
+            continue
+        latest = float(df["Close"].iloc[-1])
+        prev = float(df["Close"].iloc[-2])
+        if prev <= 0:
+            continue
+        meta = info.get(ticker, {})
+        rows.append({
+            "Symbol": ticker.replace(".NS", ""),
+            "Company Name": meta.get("name") or "N/A",
+            "Price": latest,
+            "Change %": (latest - prev) / prev * 100,
+        })
+    rows.sort(key=lambda r: r["Change %"], reverse=True)
+    return {"available": True, "source": source, "rows": rows}
