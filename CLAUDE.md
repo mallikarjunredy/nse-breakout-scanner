@@ -1066,10 +1066,50 @@ workbook. Excel export uses `openpyxl` via `pandas.ExcelWriter`.
   purely on NSE trading hours in IST and weekday. Does **not** account
   for exchange holidays -- no holiday calendar is wired up; this is
   called out in the header's data-source popover.
-- **Market Overview** (Home): Nifty 50, Bank Nifty, and Sensex level +
-  change%, independent of the strategy's own Nifty 50 relative-strength
-  calculation (same index, different purpose -- display vs. a filter
-  condition).
+- **Market and Sectors** (Home, `render_market_and_sectors_card()` in
+  `app.py`) -- replaced the old dark-themed Nifty 50/Bank Nifty/Sensex
+  `st.metric` trio, built from a user-supplied reference screenshot: a
+  light, white-background card (deliberately breaking from the rest of
+  this app's dark theme, same precedent as the Home chart pane's light
+  `plotly_white` figure) with two sub-sections, **Broad Based** and
+  **Sectoral**, each row showing an index's name, a small sparkline, its
+  latest value, and its change % vs. the previous session's close
+  (green ▲ / red ▼). `market_overview.get_market_and_sectors_snapshot()`
+  is the data source; independent of the strategy's own Nifty 50
+  relative-strength calculation and of `get_indices_snapshot()` (still
+  used by the ticker tape, untouched by this change).
+  - **Sparklines are built from the most recent session's own 5-minute
+    intraday bars, not multi-day daily closes**: several of these
+    indices (NIFTY Financial Services, NIFTY Private Bank, NIFTY
+    Healthcare, NIFTY Largemidcap 250, NIFTY Midsmallcap 400) have
+    almost no backfilled *daily* history on Yahoo Finance -- often just
+    one cached row no matter how far back requested -- but every one of
+    them has a full intraday 5-minute series for the last several
+    sessions, confirmed by direct testing before building this.
+    "Previous close" is the prior session's own last intraday bar, not
+    a separate daily-history lookup. `_bulk_intraday_5m()` fetches all
+    ~20 indices in one bulk `yf.download(interval="5m", period="5d")`
+    call, mirroring `scanner.download_history`'s bulk-download
+    discipline (that function is hardcoded to daily bars, so this is a
+    separate helper rather than an addition to it).
+  - **Three "Broad Based" rows the reference screenshot shows have no
+    confirmed Yahoo Finance ticker at all**: NIFTY 100 Largecap, NIFTY
+    100 Smallcap, NIFTY 100 Midcap. Similarly-named indices exist on
+    Yahoo (NIFTY SMLCAP 100 as `^CNXSC`, NIFTY MIDCAP 50 as
+    `^NSEMDCP50`) but are confirmed-different indices with different
+    values, not the ones the screenshot shows -- verified by comparing
+    fetched values against the reference numbers. Rather than mislabel
+    one index as another, `_BROAD_BASED_INDICES` maps these three to
+    `None` and they always render `available: False`, an explicit
+    "Data unavailable" row kept for layout completeness rather than a
+    fabricated number.
+  - Sparklines themselves are plain inline SVG (`_sparkline_svg()` in
+    `app.py`), not a Plotly figure per row: this card renders up to 20
+    of them at once, and a real chart component per row would be far
+    heavier than this purely decorative trend line needs. A light
+    dashed reference line at the previous close's own position (in the
+    same normalized scale as the sparkline) shows at a glance whether
+    today's session is running above or below where it started.
 
 ## Windows TLS interception workaround
 

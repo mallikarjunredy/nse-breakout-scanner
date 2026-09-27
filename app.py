@@ -276,6 +276,34 @@ st.markdown(
     .why-item { font-size: 0.85rem; color: #CFE3F5; margin: 0.4rem 0; }
     .why-item.bad { color: #FF6B6B; }
     .news-item { font-size: 0.8rem; color: #CFE3F5; margin: 0.3rem 0; }
+    .mkt-sectors-wrap {
+        background: #FFFFFF; border: 1px solid #EAEAEA; border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06); padding: 0.3rem 0 0.5rem 0; margin-bottom: 1rem;
+    }
+    .mkt-sectors-header {
+        font-size: 1.05rem; font-weight: 700; color: #1A1A1A; padding: 0.5rem 0.9rem 0.1rem 0.9rem;
+    }
+    .mkt-sectors-subheader {
+        font-size: 0.72rem; font-weight: 700; color: #9AA0A6; text-transform: uppercase;
+        letter-spacing: 0.04em; padding: 0.7rem 0.9rem 0.15rem 0.9rem;
+    }
+    .mkt-sectors-row {
+        display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+        padding: 0.5rem 0.9rem; border-bottom: 1px solid #EFEFEF; flex-wrap: wrap;
+    }
+    .mkt-sectors-row:last-child { border-bottom: none; }
+    .mkt-sectors-name { flex: 1 1 38%; font-size: 0.83rem; color: #1A1A1A; font-weight: 500; min-width: 110px; }
+    .mkt-sectors-graph { flex: 0 0 auto; display: flex; justify-content: center; }
+    .mkt-sectors-value { flex: 0 0 auto; text-align: right; min-width: 88px; }
+    .mkt-sectors-num { font-size: 0.83rem; color: #1A1A1A; font-weight: 600; }
+    .mkt-sectors-chg { font-size: 0.76rem; font-weight: 600; margin-top: 0.1rem; }
+    .mkt-sectors-na { color: #C9CDD3; font-size: 0.8rem; text-align: center; width: 90px; }
+    .mkt-sectors-na-text { font-size: 0.76rem; color: #9AA0A6; }
+    @media (max-width: 480px) {
+        .mkt-sectors-name { flex: 1 1 100%; }
+        .mkt-sectors-graph { order: 3; flex: 1 0 auto; justify-content: flex-start; margin-top: 0.2rem; }
+        .mkt-sectors-value { order: 2; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -618,21 +646,90 @@ def render_home_header():
         st.caption("⏳ This data may be stale — an auto-refresh is due. Use ▶️ Run Scan for the latest.")
 
 
-def render_market_overview_card():
-    with st.container(border=True):
-        st.markdown(
-            '<div class="card-header"><span class="badge-dot" style="background:#4F7CFF;"></span>'
-            "📈 Market Overview</div>",
-            unsafe_allow_html=True,
+def _sparkline_svg(values: list[float], color: str, ref_value: float | None = None,
+                    width: int = 90, height: int = 30) -> str:
+    """A minimal inline-SVG sparkline (no axes/gridlines/interactivity --
+    just a thin polyline) for the Market and Sectors card. Plain SVG
+    rather than a Plotly figure per row: this card can render 20 of
+    these at once, and a real chart component per row would be far
+    heavier than this whole feature needs for a purely decorative trend
+    line. `ref_value` (the previous close) is drawn as a light dashed
+    reference line at its own position in the same normalized scale, so
+    today's line visibly crosses above/below where it started.
+    """
+    if not values or len(values) < 2:
+        return ""
+    lo, hi = min(values), max(values)
+    rng = (hi - lo) or 1.0
+    pad = 2
+
+    def _y(v):
+        return height - pad - (v - lo) / rng * (height - 2 * pad)
+
+    step = (width - 2 * pad) / (len(values) - 1)
+    points = " ".join(f"{pad + i * step:.1f},{_y(v):.1f}" for i, v in enumerate(values))
+    ref_line = ""
+    if ref_value is not None:
+        ry = _y(max(lo, min(hi, ref_value)))
+        ref_line = (
+            f'<line x1="{pad}" y1="{ry:.1f}" x2="{width - pad}" y2="{ry:.1f}" '
+            f'stroke="#CBD0D6" stroke-width="1" stroke-dasharray="2,2"/>'
         )
-        indices = market_overview.get_indices_snapshot()
-        if not indices:
-            st.caption("Index data unavailable right now.")
-        else:
-            cols = st.columns(len(indices))
-            for col, idx in zip(cols, indices):
-                col.metric(idx["name"], f"{idx['level']:,.2f}", f"{idx['change_pct']:+.2f}%")
-        st.caption("Nifty 50, Bank Nifty, and Sensex levels from Yahoo Finance (delayed/EOD).")
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'xmlns="http://www.w3.org/2000/svg">{ref_line}'
+        f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="1.6" '
+        f'stroke-linejoin="round" stroke-linecap="round"/></svg>'
+    )
+
+
+def render_market_and_sectors_card():
+    """Replaces the old dark-themed Nifty 50/Bank Nifty/Sensex trio with
+    a wider "Market and Sectors" card, built from a user-supplied
+    reference screenshot: a light, white-background list (deliberately
+    breaking from the rest of this app's dark theme, same precedent as
+    the Home chart pane's light `plotly_white` figure) with two
+    sub-sections -- Broad Based and Sectoral -- each row showing an
+    index's name, a small intraday sparkline, its latest value, and its
+    change % vs. the previous session's close (green/red, ▲/▼).
+    """
+    with st.spinner("Loading market and sector indices..."):
+        snapshot = market_overview.get_market_and_sectors_snapshot()
+
+    def _row_html(row: dict) -> str:
+        if not row["available"]:
+            return (
+                '<div class="mkt-sectors-row">'
+                f'<div class="mkt-sectors-name">{row["name"]}</div>'
+                '<div class="mkt-sectors-graph mkt-sectors-na">—</div>'
+                '<div class="mkt-sectors-value"><span class="mkt-sectors-na-text">Data unavailable</span></div>'
+                '</div>'
+            )
+        positive = row["change_pct"] >= 0
+        color = "#1DA36B" if positive else "#E5484D"
+        arrow = "▲" if positive else "▼"
+        svg = _sparkline_svg(row["sparkline"], color, ref_value=row["prev_close"])
+        return (
+            '<div class="mkt-sectors-row">'
+            f'<div class="mkt-sectors-name">{row["name"]}</div>'
+            f'<div class="mkt-sectors-graph">{svg}</div>'
+            '<div class="mkt-sectors-value">'
+            f'<div class="mkt-sectors-num">{row["value"]:,.2f}</div>'
+            f'<div class="mkt-sectors-chg" style="color:{color};">{arrow} {abs(row["change_pct"]):.2f}%</div>'
+            '</div></div>'
+        )
+
+    html = ['<div class="mkt-sectors-wrap">', '<div class="mkt-sectors-header">Market and Sectors</div>']
+    html.append('<div class="mkt-sectors-subheader">Broad Based</div>')
+    html.extend(_row_html(r) for r in snapshot["broad_based"])
+    html.append('<div class="mkt-sectors-subheader">Sectoral</div>')
+    html.extend(_row_html(r) for r in snapshot["sectoral"])
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+    st.caption(
+        "📡 Yahoo Finance • Delayed / cached data. Sparkline = the most recent session's own intraday "
+        "movement; % change is vs. the previous session's close."
+    )
 
 
 def render_watchlist_overview_card():
@@ -1315,7 +1412,7 @@ if nav_page == "Home":
     dash_col, chart_col = st.columns([split_pct, 100 - split_pct])
 
     with dash_col:
-        render_market_overview_card()
+        render_market_and_sectors_card()
         render_watchlist_overview_card()
         render_fifty_two_week_card()
         render_latest_opportunities_card()
