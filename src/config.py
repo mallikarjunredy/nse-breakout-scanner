@@ -226,3 +226,23 @@ TREND_CONSOL_BACKTEST_ENTRY_GAP_MAX_PCT = 2.0  # skip entry if next open is more
 TREND_CONSOL_BACKTEST_BROKERAGE_PCT = 0.03  # per side, % of trade value
 TREND_CONSOL_BACKTEST_TRANSACTION_CHARGES_PCT = 0.10  # STT/exchange/other charges, per side, % of trade value
 TREND_CONSOL_BACKTEST_SLIPPAGE_PCT = 0.05  # per side, % of fill price
+
+# "RSI Divergence at Support" -- see src/rsi_divergence.py. Built from a
+# chart the user shared: price flat-to-declining near its own 52-week
+# low, tested more than once, while RSI made a higher low across those
+# tests (a bullish divergence), then broke out on volume. Adjustable
+# defaults, like Rising Channel / Resistance Breakout: this pattern came
+# from a described chart, not a numbered spec.
+RSI_DIVERGENCE_MIN_PRICE_INR = 100.0
+RSI_DIVERGENCE_PIVOT_N = 3  # candles required on each side to confirm a swing low
+RSI_DIVERGENCE_SUPPORT_LOOKBACK_DAYS = 252  # ~52 weeks, window the support/low level is measured over
+RSI_DIVERGENCE_SUPPORT_ZONE_PCT = 5.0  # a swing low within this % of the 52-week low counts as a "support test"
+RSI_DIVERGENCE_MIN_TOUCH_SEPARATION_DAYS = 15  # minimum sessions between the earliest and most recent support test
+RSI_DIVERGENCE_RECENT_TOUCH_MAX_AGE_DAYS = 15  # the most recent support test must still be this fresh
+RSI_DIVERGENCE_PRICE_TOLERANCE_PCT = 3.0  # recent test's low may be at most this % above the earliest test's low
+RSI_DIVERGENCE_MIN_RSI_RISE_PTS = 5.0  # RSI(14) at the recent test must exceed RSI at the earliest test by this much
+RSI_DIVERGENCE_PREBREAKOUT_DISTANCE_MIN_PCT = 0.0
+RSI_DIVERGENCE_PREBREAKOUT_DISTANCE_MAX_PCT = 5.0
+RSI_DIVERGENCE_BREAKOUT_MIN_PCT = 0.5  # close must clear resistance by at least this %
+RSI_DIVERGENCE_VOLUME_MULT = 1.5
+RSI_DIVERGENCE_VOLUME_AVG_PERIOD = 20

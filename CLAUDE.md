@@ -988,6 +988,103 @@ date the button happened to be clicked.
   accident, matching this app's general care around destructive
   actions.
 
+## Ninth strategy: "RSI Divergence at Support"
+
+`src/rsi_divergence.py`, page "🔀 RSI Divergence at Support" -- built
+from a chart the user shared and described directly, not a numbered
+spec: price sliding sideways/down into the same support level in June
+and again in September, RSI(14) clearly rising across those two tests
+even though price didn't, then a green breakout candle with a volume
+spike. A distinct setup from every other strategy in this app -- the
+channel-based strategies (Daily Rising Channel, Triple EMA Golden
+Cross) need a *rising* price structure to fit a channel to, and Bullish
+Recovery Above EMAs only looks at a single prior down/flat session, not
+a multi-month divergence. Adjustable from the UI (see `default_params()`
+/ config.py's `RSI_DIVERGENCE_*` defaults), like Rising Channel/
+Resistance Breakout, since "how wide a band counts as the same support
+level" and "how many RSI points counts as a real divergence" are
+judgment calls, not a fixed numeric spec.
+
+**The stages, as rules** (`evaluate_ticker` / `_find_support_divergence`):
+
+- **52-week support zone**: the lowest Low over the trailing
+  `support_lookback_days` (252, ~52 weeks) sessions. A ticker with less
+  than a full lookback of history is skipped outright -- there's no way
+  to know its genuine 52-week low from a shorter window, the same
+  discipline `fifty_two_week.py` already uses for its own 52-week
+  high/low card.
+- **At least two support tests**: swing lows (`rising_channel.find_swing_points`,
+  reused as-is -- the same generic, leak-free detector Resistance
+  Breakout and Triple EMA Golden Cross's channel gate already reuse)
+  whose Low falls within `support_zone_pct` (5%) of that 52-week low.
+  The earliest and most recent such test must be at least
+  `min_touch_separation_days` (15) sessions apart, and the most recent
+  one must still be fresh -- within `recent_touch_max_age_days` (15)
+  sessions of today.
+- **Bullish divergence between those two tests**: the recent test's Low
+  must be at or below the earliest test's Low, allowing only a small
+  `price_tolerance_pct` (3%) cushion -- a meaningfully *higher* low
+  there would just be normal bullish structure, not divergence. RSI(14)
+  at the recent test must exceed RSI at the earliest test by at least
+  `min_rsi_rise_pts` (5 points) -- the "price flat/down, RSI up" signature
+  the user's chart showed.
+- **Recovery high ("resistance")**: unlike Resistance Breakout's
+  long-past swing high or Rising Channel's fitted sloped line, this is
+  simply the highest High reached *since* the most recent support test
+  and *before* today -- the peak of the current recovery leg off
+  support. Excluding today's own bar from that window means today's
+  breakout candle can never inflate the very level it's being measured
+  against.
+- **Pre-Breakout Watchlist**: today's close at/below that recovery high,
+  within `prebreakout_distance_min/max_pct` (0-5%) -- divergence
+  confirmed, breakout not yet through.
+- **Confirmed Breakout / Breakout — Volume Unconfirmed**: yesterday's
+  close was at/below the recovery high (plus `breakout_min_pct`
+  clearance) and today's close clears it. Volume ≥ `breakout_volume_mult`
+  (1.5x) the preceding `breakout_volume_avg_period` (20) -session
+  average splits Confirmed from Unconfirmed, both computed in the same
+  pass, never silently dropped.
+
+**RSI continuation note** (informational only, same convention as
+Resistance Breakout's own RSI momentum note -- never a gate): compares
+today's RSI to RSI at the most recent support test, flagging with
+ℹ️/⚠️ whether momentum has kept building since that test or eased back a
+little. The broader divergence still holds either way; this is a
+caution/confirmation flag the user weighs themselves.
+
+**Verified against real data**: a full Nifty 500 scan found 13
+Pre-Breakout Watchlist matches (0 Confirmed/Unconfirmed that day --
+expected, the same "strict conditions -> few or zero matches is normal"
+pattern already documented for Upside Buy Movement) with coherent
+numbers -- e.g. Dr. Reddy's: first support test 2026-01-21 at ₹1148.40
+(RSI 21.1), second test 2026-09-11 at ₹1130.00 (RSI 47.7, a 26.6-point
+rise on a lower price low), RSI continuing to 64.9 by the scan date,
+close 1.10% below the ₹1259.06 Buy Level.
+
+**Universe**: `st.radio` toggle between "Nifty 500" and "All Stocks"
+(same loaders as every other strategy), mandatory
+`config.RSI_DIVERGENCE_MIN_PRICE_INR` (₹100) floor shown as a caption.
+Own cache (`st.session_state.rsi_divergence_cache`, keyed by
+`(universe_name, sorted(params.items()))`), not logged to
+`scan_history`.
+
+**Results tables**: three tabs (Pre-Breakout Watchlist / Confirmed
+Breakouts / Breakout — Volume Unconfirmed), each with Symbol, Company
+Name, Setup Status, Signal Date, Current Price, Support Level (52W
+Low), Resistance Level (the recovery high), Buy Level, RSI, both support
+tests' dates/RSI, RSI Rise (pts), Distance %, Volume Ratio. Selecting a
+row sets a page-local `st.session_state.rd_selected_ticker` (like
+`rc_selected_ticker`/`rbo_selected_ticker`), not the shared detail
+panel, and loads `rsi_divergence.build_divergence_chart()`: a 3-row
+Plotly subplot -- price (candlestick + a cyan dashed 52-week-support
+line + a red dashed recovery-high line + a green dashed Buy Level line
++ purple ▽ markers at both support tests) / Volume (signal day
+highlighted orange) / RSI(14) (its own line, plus a green dotted line
+joining RSI at the same two support tests -- so the "rising even though
+price didn't" divergence this strategy is built around is visible at a
+glance, not just implied by the numbers) -- plus the row's own "Why
+Qualified" string (including the RSI continuation note) underneath.
+
 ## Home page layout: terminal-style split
 
 Top to bottom:

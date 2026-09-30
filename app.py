@@ -17,7 +17,7 @@ from streamlit_autorefresh import st_autorefresh
 
 from src import (
     breakout_flag, breakout_flag_tracker, bullish_recovery, config, deep_dive, detail, indicators,
-    market_overview, pre_breakout, resistance_breakout, rising_channel, scan_history, scanner,
+    market_overview, pre_breakout, resistance_breakout, rising_channel, rsi_divergence, scan_history, scanner,
     trend_consolidation, triple_ema_golden_cross, watchlist,
 )
 
@@ -162,6 +162,10 @@ if "breakout_flag_cache" not in st.session_state:
     st.session_state.breakout_flag_cache = {}  # keyed by (universe_name, sorted(params.items()))
 if "bf_selected_ticker" not in st.session_state:
     st.session_state.bf_selected_ticker = None
+if "rsi_divergence_cache" not in st.session_state:
+    st.session_state.rsi_divergence_cache = {}  # keyed by (universe_name, sorted(params.items()))
+if "rd_selected_ticker" not in st.session_state:
+    st.session_state.rd_selected_ticker = None
 if "watchlist_cache" not in st.session_state:
     st.session_state.watchlist_cache = {}
 if "selected_ticker" not in st.session_state:
@@ -340,6 +344,7 @@ _NAV_ITEMS = [
     ("Daily Rising Channel", "📐"), ("Daily Trend + Consolidation", "🧭"),
     ("Trend + Consolidation Backtest", "🧪"), ("Bullish Recovery Above EMAs", "🌅"),
     ("Resistance Breakout", "⛰️"), ("Triple EMA Golden Cross", "🥇"), ("Breakout Flag Continuation", "🚩"),
+    ("RSI Divergence at Support", "🔀"),
     ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
 ]
 
@@ -3260,6 +3265,235 @@ if nav_page == "Breakout Flag Continuation":
         "claim that any stock will keep moving in this direction."
     )
     render_footer(scan_ts=bf_scan_time)
+
+
+# ---------------------------------------------------------------------------
+# Page: RSI Divergence at Support
+# ---------------------------------------------------------------------------
+
+_RD_COLUMN_ORDER = [
+    "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
+    "Support Level (52W Low)", "Resistance Level", "Buy Level", "RSI",
+    "Earliest Touch Date", "Earliest Touch RSI", "Recent Touch Date", "Recent Touch RSI", "RSI Rise (pts)",
+    "Distance %", "Volume Ratio",
+]
+_RD_COLUMN_CONFIG = {
+    "Rank": st.column_config.NumberColumn("Rank", width="small"),
+    "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+    "Company Name": st.column_config.TextColumn("Company Name"),
+    "Setup Status": st.column_config.TextColumn("Status", width="small"),
+    "Signal Date": st.column_config.TextColumn("Signal Date", width="small"),
+    "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
+    "Support Level (52W Low)": st.column_config.NumberColumn("52W Support", format="₹%.2f"),
+    "Resistance Level": st.column_config.NumberColumn("Recovery High", format="₹%.2f"),
+    "Buy Level": st.column_config.NumberColumn("Buy Level", format="₹%.2f"),
+    "RSI": st.column_config.NumberColumn("RSI14", format="%.1f"),
+    "Earliest Touch Date": st.column_config.TextColumn("1st Test", width="small"),
+    "Earliest Touch RSI": st.column_config.NumberColumn("1st Test RSI", format="%.1f"),
+    "Recent Touch Date": st.column_config.TextColumn("2nd Test", width="small"),
+    "Recent Touch RSI": st.column_config.NumberColumn("2nd Test RSI", format="%.1f"),
+    "RSI Rise (pts)": st.column_config.NumberColumn("RSI Rise", format="%+.1f"),
+    "Distance %": st.column_config.NumberColumn("Distance %", format="%.2f%%"),
+    "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+}
+
+
+def _render_rd_tab(df: pd.DataFrame, key_prefix: str):
+    if df.empty:
+        st.info("No stocks matched your saved strategy in this scan.")
+        return
+    _export_buttons(df, key_prefix, key_prefix)
+    event = st.dataframe(
+        df, hide_index=True, width="stretch", column_config=_RD_COLUMN_CONFIG,
+        column_order=[c for c in _RD_COLUMN_ORDER if c in df.columns],
+        on_select="rerun", selection_mode="single-row", key=f"{key_prefix}_table",
+    )
+    rows = event["selection"]["rows"]
+    if rows:
+        st.session_state.rd_selected_ticker = df.iloc[rows[0]]["Ticker"]
+
+
+if nav_page == "RSI Divergence at Support":
+    st.markdown("### 🔀 RSI Divergence at Support")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "A stock whose price has been flat-to-declining near its own 52-week low, tested more than once, "
+        "while RSI(14) made a *higher* low across those tests -- a bullish divergence -- and is now "
+        "recovering back toward a nearby high (Pre-Breakout Watchlist) or has already closed above it on "
+        "volume (Confirmed Breakout / Breakout — Volume Unconfirmed). Not a claim that a divergence "
+        "guarantees a reversal -- it's a rule-based scanner match, not a guaranteed profitable recommendation."
+    )
+
+    rd_universe_choice = st.radio(
+        "Universe", ["Nifty 500", "All Stocks"], horizontal=True, key="rd_universe",
+    )
+    rd_universe_name = "nifty500" if rd_universe_choice == "Nifty 500" else "all_nse"
+    st.caption(f"✅ Mandatory: closing price > ₹{config.RSI_DIVERGENCE_MIN_PRICE_INR:.0f}.")
+
+    with st.expander("⚙️ Adjust Thresholds"):
+        rd1, rd2, rd3 = st.columns(3)
+        rd_support_lookback = rd1.slider(
+            "Support Lookback (sessions)", 150, 380, config.RSI_DIVERGENCE_SUPPORT_LOOKBACK_DAYS, 10,
+            key="rd_support_lookback", help="Window the 52-week support/low level is measured over.",
+        )
+        rd_support_zone = rd2.slider(
+            "Support Zone (%)", 1.0, 10.0, config.RSI_DIVERGENCE_SUPPORT_ZONE_PCT, 0.5,
+            key="rd_support_zone", help="A swing low within this % of the 52-week low counts as a support test.",
+        )
+        rd_touch_sep = rd3.slider(
+            "Min. Touch Separation (sessions)", 5, 60, config.RSI_DIVERGENCE_MIN_TOUCH_SEPARATION_DAYS, 5,
+            key="rd_touch_sep", help="Minimum sessions between the earliest and most recent support test.",
+        )
+        rd4, rd5, rd6 = st.columns(3)
+        rd_touch_age = rd4.slider(
+            "Recent Touch Max Age (sessions)", 5, 40, config.RSI_DIVERGENCE_RECENT_TOUCH_MAX_AGE_DAYS, 5,
+            key="rd_touch_age", help="The most recent support test must still be this fresh.",
+        )
+        rd_price_tol = rd5.slider(
+            "Price Tolerance (%)", 0.0, 10.0, config.RSI_DIVERGENCE_PRICE_TOLERANCE_PCT, 0.5,
+            key="rd_price_tol",
+            help="The recent test's low may be at most this % above the earliest test's low.",
+        )
+        rd_min_rsi_rise = rd6.slider(
+            "Min. RSI Rise (points)", 1.0, 20.0, config.RSI_DIVERGENCE_MIN_RSI_RISE_PTS, 0.5,
+            key="rd_min_rsi_rise", help="RSI at the recent test must exceed RSI at the earliest test by this much.",
+        )
+        rd7, rd8, rd9 = st.columns(3)
+        rd_distance = rd7.slider(
+            "Distance to Recovery High (%)", 0.0, 15.0,
+            (config.RSI_DIVERGENCE_PREBREAKOUT_DISTANCE_MIN_PCT, config.RSI_DIVERGENCE_PREBREAKOUT_DISTANCE_MAX_PCT),
+            0.5, key="rd_distance", help="Pre-Breakout Watchlist band: how close to (but below) the recovery high.",
+        )
+        rd_breakout_min = rd8.slider(
+            "Breakout Min. Clearance (%)", 0.1, 3.0, config.RSI_DIVERGENCE_BREAKOUT_MIN_PCT, 0.1,
+            key="rd_breakout_min", help="Close must clear the recovery high by at least this %.",
+        )
+        rd_vol_mult = rd9.slider(
+            "Breakout Volume Multiplier", 1.0, 4.0, config.RSI_DIVERGENCE_VOLUME_MULT, 0.1,
+            key="rd_vol_mult",
+        )
+        rd_pivot_n = st.slider(
+            "Swing Confirmation Bars (each side)", 2, 6, config.RSI_DIVERGENCE_PIVOT_N, 1,
+            key="rd_pivot_n", help="Bars required on each side of a candle for it to count as a support test.",
+        )
+
+    rd_params = rsi_divergence.default_params()
+    rd_params.update({
+        "support_lookback_days": rd_support_lookback,
+        "support_zone_pct": rd_support_zone,
+        "min_touch_separation_days": rd_touch_sep,
+        "recent_touch_max_age_days": rd_touch_age,
+        "price_tolerance_pct": rd_price_tol,
+        "min_rsi_rise_pts": rd_min_rsi_rise,
+        "prebreakout_distance_min_pct": rd_distance[0],
+        "prebreakout_distance_max_pct": rd_distance[1],
+        "breakout_min_pct": rd_breakout_min,
+        "breakout_volume_mult": rd_vol_mult,
+        "pivot_n": rd_pivot_n,
+    })
+    rd_cache_key = (rd_universe_name, tuple(sorted(rd_params.items())))
+
+    rd_cache = st.session_state.rsi_divergence_cache.get(rd_cache_key)
+    run_rd_clicked = st.button("▶️ Run RSI Divergence Scan", type="primary", key="run_rsi_divergence")
+
+    if run_rd_clicked or rd_cache is None:
+        rd_progress = st.progress(0, text="Starting scan...")
+
+        def _on_rd_progress(frac, text_):
+            rd_progress.progress(min(frac, 1.0), text=text_)
+
+        try:
+            with st.spinner(f"Scanning {rd_universe_choice} for RSI Divergence setups..."):
+                result_rd = rsi_divergence.scan_rsi_divergence(
+                    universe_name=rd_universe_name, min_price=config.RSI_DIVERGENCE_MIN_PRICE_INR,
+                    params=rd_params, progress_callback=_on_rd_progress,
+                )
+            rd_progress.empty()
+            st.session_state.rsi_divergence_cache[rd_cache_key] = (time.time(), result_rd)
+        except Exception as exc:
+            rd_progress.empty()
+            st.error(f"Scan failed: {exc}. This is usually a temporary Yahoo Finance or network issue -- try again.")
+            result_rd = None
+    else:
+        result_rd = rd_cache[1]
+
+    if result_rd is None:
+        st.stop()
+
+    rd_scan_time = st.session_state.rsi_divergence_cache[rd_cache_key][0]
+    rd_scan_label = datetime.datetime.fromtimestamp(rd_scan_time, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
+    rd_asof = result_rd.get("data_asof_date")
+    rd_asof_label = rd_asof.strftime("%d %b %Y") if rd_asof else "N/A"
+    st.caption(
+        f"Last scanned: {rd_scan_label} · Prices as of {rd_asof_label} close · "
+        f"Universe: {result_rd['universe_label']} ({result_rd['universe_size']} instruments) · "
+        f"Scanned OK: {result_rd['scanned']}"
+    )
+    rd_next_refresh_in = config.SCAN_CACHE_TTL_SECONDS - (time.time() - rd_scan_time)
+    if rd_next_refresh_in <= 0:
+        st.caption("⏳ This data may be stale -- use ▶️ Run RSI Divergence Scan for the latest.")
+
+    pre_df_rd = result_rd["pre_breakout"]
+    confirmed_df_rd = result_rd["confirmed_breakout"]
+    unconfirmed_df_rd = result_rd["volume_unconfirmed"]
+
+    tab_pre_rd, tab_confirmed_rd, tab_unconfirmed_rd = st.tabs([
+        f"👀 Pre-Breakout Watchlist ({len(pre_df_rd)})",
+        f"🚀 Confirmed Breakouts ({len(confirmed_df_rd)})",
+        f"⚠️ Breakout — Volume Unconfirmed ({len(unconfirmed_df_rd)})",
+    ])
+    with tab_pre_rd:
+        st.caption("Bullish divergence confirmed, recovering toward the recent high. Not a guaranteed breakout.")
+        _render_rd_tab(pre_df_rd, "rd_pre")
+    with tab_confirmed_rd:
+        st.caption("Closed above the recovery high, on the required volume.")
+        _render_rd_tab(confirmed_df_rd, "rd_confirmed")
+    with tab_unconfirmed_rd:
+        st.caption("Same price breakout, but volume didn't confirm it -- treat with extra caution.")
+        _render_rd_tab(unconfirmed_df_rd, "rd_unconfirmed")
+
+    st.divider()
+    st.markdown("#### 📊 Selected Candidate Chart")
+    rd_ticker = st.session_state.rd_selected_ticker
+    if not rd_ticker:
+        st.caption("👆 Click a row in any table above to see its divergence chart here.")
+    else:
+        rd_earliest_idx = result_rd["earliest_idx"].get(rd_ticker)
+        rd_recent_idx = result_rd["recent_idx"].get(rd_ticker)
+        rd_res_idx = result_rd["resistance_idx"].get(rd_ticker)
+        rd_sig_idx = result_rd["signal_idx"].get(rd_ticker)
+        rd_combined = pd.concat([pre_df_rd, confirmed_df_rd, unconfirmed_df_rd], ignore_index=True)
+        rd_match = rd_combined[rd_combined["Ticker"] == rd_ticker]
+        if None in (rd_earliest_idx, rd_recent_idx, rd_res_idx, rd_sig_idx) or rd_match.empty:
+            st.caption(f"No divergence data for {rd_ticker} under the current scan -- select a row above again.")
+        else:
+            rd_row = rd_match.iloc[0]
+            with st.spinner(f"Loading chart for {rd_ticker}..."):
+                rd_chart_history = scanner.download_history([rd_ticker])
+            rd_chart_df = rd_chart_history.get(rd_ticker)
+            if rd_chart_df is None:
+                st.caption("Price history unavailable for this ticker right now.")
+            else:
+                rd_fig = rsi_divergence.build_divergence_chart(
+                    rd_chart_df, rd_earliest_idx, rd_recent_idx, float(rd_row["Support Level (52W Low)"]),
+                    rd_res_idx, float(rd_row["Resistance Level"]), rd_sig_idx, rd_ticker,
+                    buy_level=float(rd_row["Buy Level"]),
+                )
+                st.plotly_chart(rd_fig, width="stretch")
+                st.caption(
+                    "Cyan dashed line = 52-week support. Red dashed line = recovery high (resistance). Green "
+                    "dashed line = Buy Level. Purple ▽ = the two support tests. In the RSI panel, the green "
+                    "dotted line joins RSI at those same two tests -- rising even though price didn't is the "
+                    "divergence this strategy looks for. The signal day's Volume bar is highlighted orange."
+                )
+                st.markdown(f"**Why qualified:**\n\n{rd_row['Why Qualified']}")
+
+    st.caption(
+        "The support-zone/divergence/recovery/breakout structure and volume confirmation are rule-based "
+        "checks against this strategy's own adjustable thresholds -- not guaranteed profitable "
+        "recommendations, and not a claim that any stock will keep moving in this direction."
+    )
+    render_footer(scan_ts=rd_scan_time)
 
 
 # ---------------------------------------------------------------------------
