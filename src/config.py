@@ -246,3 +246,42 @@ RSI_DIVERGENCE_PREBREAKOUT_DISTANCE_MAX_PCT = 5.0
 RSI_DIVERGENCE_BREAKOUT_MIN_PCT = 0.5  # close must clear resistance by at least this %
 RSI_DIVERGENCE_VOLUME_MULT = 1.5
 RSI_DIVERGENCE_VOLUME_AVG_PERIOD = 20
+
+# "Daily Trend + Consolidation Breakout -- V2" -- see
+# src/trend_consolidation_v2.py. A distinct, more structurally-anchored
+# version of the same breakout family, built from a detailed written
+# quant spec (not a screenshot): EMA-based trend (vs V1's SMA) with no
+# relative-strength-vs-benchmark gate, a support-anchored stop (vs V1's
+# entry-anchored ATR stop), a per-trade risk-distance cap, a 10%-of-
+# equity position cap, and ADTV (not the day's volume spike) as the
+# cash-allocation tie-break. V1 (src/trend_consolidation.py,
+# TREND_CONSOL_* above) is completely untouched and remains fully
+# functional and reachable as its own page.
+TREND_CONSOL_V2_MIN_PRICE_INR = 100.0
+TREND_CONSOL_V2_MIN_HISTORY_SESSIONS = 300
+TREND_CONSOL_V2_MIN_TRADED_VALUE_INR = 10_00_00_000.0  # ₹10 crore -- close x volume estimate, 20-session avg, excl. signal day
+TREND_CONSOL_V2_TRADED_VALUE_AVG_DAYS = 20
+TREND_CONSOL_V2_EMA_FAST = 50
+TREND_CONSOL_V2_EMA_SLOW = 200
+TREND_CONSOL_V2_EMA_FAST_RISING_LOOKBACK = 5
+TREND_CONSOL_V2_CONSOLIDATION_PERIOD = 15
+TREND_CONSOL_V2_MAX_WIDTH_PCT = 8.0
+TREND_CONSOL_V2_PREBREAKOUT_DISTANCE_MIN_PCT = 0.0
+TREND_CONSOL_V2_PREBREAKOUT_DISTANCE_MAX_PCT = 2.0
+TREND_CONSOL_V2_BREAKOUT_BUFFER_PCT = 0.2  # close must clear resistance by at least this %
+TREND_CONSOL_V2_VOLUME_AVG_DAYS = 20
+TREND_CONSOL_V2_VOLUME_MULTIPLIER = 1.5
+TREND_CONSOL_V2_ATR_PERIOD = 14
+TREND_CONSOL_V2_BENCHMARK_INDEX = "^NSEI"
+
+TREND_CONSOL_V2_BACKTEST_INITIAL_EQUITY_INR = 10_00_000.0  # ₹10 lakh paper capital
+TREND_CONSOL_V2_BACKTEST_RISK_PCT = 0.5  # % of current equity risked per trade
+TREND_CONSOL_V2_BACKTEST_STOP_ATR_MULT = 0.2  # stop = stored support - this x signal-day ATR14 (off support, not entry)
+TREND_CONSOL_V2_BACKTEST_MAX_RISK_DISTANCE_PCT = 6.0  # skip entry if entry-to-stop distance exceeds this % of entry
+TREND_CONSOL_V2_BACKTEST_TARGET_RR_MULT = 1.5  # target = entry + this x the initial per-share risk
+TREND_CONSOL_V2_BACKTEST_MAX_POSITION_PCT = 10.0  # cap any one position at this % of current equity
+TREND_CONSOL_V2_BACKTEST_MAX_HOLDING_SESSIONS = 15  # entry day counts as session 1
+TREND_CONSOL_V2_BACKTEST_ENTRY_GAP_MAX_PCT = 2.0  # skip entry if next open is more than this % above signal close
+TREND_CONSOL_V2_BACKTEST_BROKERAGE_PCT = 0.03  # per side, % of trade value
+TREND_CONSOL_V2_BACKTEST_TRANSACTION_CHARGES_PCT = 0.10  # STT/exchange/other charges, per side, % of trade value
+TREND_CONSOL_V2_BACKTEST_SLIPPAGE_PCT = 0.05  # per side, % of fill price

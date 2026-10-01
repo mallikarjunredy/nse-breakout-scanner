@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 from src import (
     breakout_flag, breakout_flag_tracker, bullish_recovery, config, deep_dive, detail, indicators,
     market_overview, pre_breakout, resistance_breakout, rising_channel, rsi_divergence, scan_history, scanner,
-    trend_consolidation, triple_ema_golden_cross, watchlist,
+    trend_consolidation, trend_consolidation_v2, triple_ema_golden_cross, watchlist,
 )
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
@@ -142,6 +142,14 @@ if "tc_selected_ticker" not in st.session_state:
     st.session_state.tc_selected_ticker = None
 if "trend_consol_backtest_result" not in st.session_state:
     st.session_state.trend_consol_backtest_result = None
+if "trend_consol_v2_cache" not in st.session_state:
+    st.session_state.trend_consol_v2_cache = {}  # keyed by (universe_name, sorted(params.items()))
+if "tcv2_selected_ticker" not in st.session_state:
+    st.session_state.tcv2_selected_ticker = None
+if "trend_consol_v2_backtest_result" not in st.session_state:
+    st.session_state.trend_consol_v2_backtest_result = None
+if "trend_consol_v1v2_comparison" not in st.session_state:
+    st.session_state.trend_consol_v1v2_comparison = None
 if "chart_symbol" not in st.session_state:
     st.session_state.chart_symbol = "^NSEI"  # Home's chart pane defaults to Nifty 50, daily
 if "rc_selected_ticker" not in st.session_state:
@@ -342,7 +350,9 @@ st.markdown(
 _NAV_ITEMS = [
     ("Home", "🏠"), ("Upside Buy Movement", "🎯"), ("Upside Buy Movement above 100", "💹"),
     ("Daily Rising Channel", "📐"), ("Daily Trend + Consolidation", "🧭"),
-    ("Trend + Consolidation Backtest", "🧪"), ("Bullish Recovery Above EMAs", "🌅"),
+    ("Trend + Consolidation Backtest", "🧪"),
+    ("Daily Trend + Consolidation V2", "🧭"), ("Trend + Consolidation V2 Backtest", "🧪"),
+    ("Bullish Recovery Above EMAs", "🌅"),
     ("Resistance Breakout", "⛰️"), ("Triple EMA Golden Cross", "🥇"), ("Breakout Flag Continuation", "🚩"),
     ("RSI Divergence at Support", "🔀"),
     ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
@@ -2362,6 +2372,545 @@ elif nav_page == "Trend + Consolidation Backtest":
         _render_period_results(
             "🔒 Out-of-Sample Period (untouched)", tcb_result["oos_metrics"], tcb_result["oos_trades"],
             tcb_result["oos_curve"], "tcb_oos",
+        )
+
+    st.divider()
+    render_footer()
+
+
+# ---------------------------------------------------------------------------
+# Page: Daily Trend + Consolidation Breakout — V2
+# ---------------------------------------------------------------------------
+
+_TCV2_COLUMN_ORDER = [
+    "Rank", "Ticker", "Company Name", "Setup Status", "Signal Date", "Current Price",
+    "Resistance", "Support", "% Below Resistance", "Consolidation Width %", "Volume Ratio",
+    "ADTV (₹ Cr, est.)", "EMA50", "EMA200",
+]
+_TCV2_COLUMN_CONFIG = {
+    "Rank": st.column_config.NumberColumn("Rank", width="small"),
+    "Ticker": st.column_config.TextColumn("Symbol", width="small"),
+    "Company Name": st.column_config.TextColumn("Company Name"),
+    "Setup Status": st.column_config.TextColumn("Status", width="small"),
+    "Signal Date": st.column_config.TextColumn("Signal Date", width="small"),
+    "Current Price": st.column_config.NumberColumn("Close", format="₹%.2f"),
+    "Resistance": st.column_config.NumberColumn("Resistance", format="₹%.2f"),
+    "Support": st.column_config.NumberColumn("Support", format="₹%.2f"),
+    "% Below Resistance": st.column_config.NumberColumn("Distance %", format="%.2f%%"),
+    "Consolidation Width %": st.column_config.NumberColumn("Width %", format="%.2f%%"),
+    "Volume Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+    "ADTV (₹ Cr, est.)": st.column_config.NumberColumn("ADTV (₹Cr, est.)", format="%.2f"),
+    "EMA50": st.column_config.NumberColumn("EMA50", format="₹%.2f"),
+    "EMA200": st.column_config.NumberColumn("EMA200", format="₹%.2f"),
+}
+
+
+def _render_tcv2_tab(df: pd.DataFrame, key_prefix: str):
+    if df.empty:
+        st.info("No stocks matched your saved strategy in this scan.")
+        return
+    _export_buttons(df, key_prefix, key_prefix)
+    event = st.dataframe(
+        df, hide_index=True, width="stretch", column_config=_TCV2_COLUMN_CONFIG,
+        column_order=[c for c in _TCV2_COLUMN_ORDER if c in df.columns],
+        on_select="rerun", selection_mode="single-row", key=f"{key_prefix}_table",
+    )
+    rows = event["selection"]["rows"]
+    if rows:
+        st.session_state.tcv2_selected_ticker = df.iloc[rows[0]]["Ticker"]
+
+
+if nav_page == "Daily Trend + Consolidation V2":
+    st.markdown("### 🧭 Daily Trend + Consolidation Breakout — V2")
+    st.warning(
+        "🧪 **Unvalidated.** This is Version 2 of the Trend + Consolidation strategy, built from a detailed "
+        "written spec -- it has not been proven profitable. See 🧪 Trend + Consolidation V2 Backtest before "
+        "treating any match here as more than a rule-based scanner hit."
+    )
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "Uses split/dividend-adjusted daily closes/highs/lows together (never adjusted close with raw "
+        "high/low) and only completed daily candles. Genuinely different rules from V1, not just "
+        "different numbers: EMA50/EMA200 trend (V1 uses SMA) required for **both** the stock and Nifty "
+        "50, with no relative-strength-vs-benchmark gate; a tight (≤8% by default) 15-session "
+        "consolidation; and either an approach to (Pre-Breakout Watchlist) or a volume-backed close above "
+        "(Confirmed Breakout) that consolidation's resistance. A wick above resistance without a "
+        "qualifying close is never treated as a breakout. Average daily traded value is a Close × Volume "
+        "**estimate** (Yahoo has no separate provider-supplied traded-value field), always labelled as "
+        "such. Rule-based scanner matches, not guaranteed profitable trades, and not a claim of any "
+        "specific win rate."
+    )
+
+    tcv2_universe_choice = st.radio(
+        "Universe", ["Nifty 500", "All NSE Stocks (₹100+)"], horizontal=True, key="tcv2_universe",
+    )
+    tcv2_universe_name = "nifty500" if tcv2_universe_choice == "Nifty 500" else "all_nse"
+
+    with st.expander("⚙️ Adjust Thresholds"):
+        v1, v2, v3 = st.columns(3)
+        tcv2_min_price = v1.number_input(
+            "Minimum Close Price (₹)", min_value=0.0, value=config.TREND_CONSOL_V2_MIN_PRICE_INR, step=10.0,
+            key="tcv2_min_price", help="Stocks closing at or below this price are excluded entirely.",
+        )
+        tcv2_min_traded_value_cr = v2.number_input(
+            "Min. Avg. Traded Value (₹ Crore, 20-session avg., est.)", min_value=0.0,
+            value=config.TREND_CONSOL_V2_MIN_TRADED_VALUE_INR / 1_00_00_000, step=1.0, key="tcv2_min_traded_value",
+            help="Liquidity filter: average of (Close × Volume) over the preceding 20 sessions, excluding "
+                 "the signal session, must exceed this. An estimate, not provider-supplied traded value.",
+        )
+        tcv2_max_width = v3.slider(
+            "Max. Consolidation Width (%)", 1.0, 20.0, config.TREND_CONSOL_V2_MAX_WIDTH_PCT, 0.5,
+            key="tcv2_max_width", help="(Resistance / Support − 1) × 100 over the consolidation window.",
+        )
+        v4, v5, v6 = st.columns(3)
+        tcv2_consolidation_period = v4.slider(
+            "Consolidation Period (sessions)", 5, 40, config.TREND_CONSOL_V2_CONSOLIDATION_PERIOD, 1,
+            key="tcv2_consolidation_period", help="How many prior sessions (excluding today) set the resistance/support.",
+        )
+        tcv2_distance = v5.slider(
+            "Pre-Breakout Distance to Resistance (%)", 0.0, 15.0,
+            (config.TREND_CONSOL_V2_PREBREAKOUT_DISTANCE_MIN_PCT, config.TREND_CONSOL_V2_PREBREAKOUT_DISTANCE_MAX_PCT),
+            0.5, key="tcv2_distance", help="How close (below resistance) counts as a Pre-Breakout Watchlist candidate.",
+        )
+        tcv2_volume_mult = v6.slider(
+            "Breakout Volume Multiplier", 1.0, 4.0, config.TREND_CONSOL_V2_VOLUME_MULTIPLIER, 0.1,
+            key="tcv2_volume_mult", help="Signal-day volume must be at least this many times the prior 20-session average.",
+        )
+        v7, v8, v9 = st.columns(3)
+        tcv2_breakout_buffer = v7.slider(
+            "Breakout Buffer (%)", 0.0, 5.0, config.TREND_CONSOL_V2_BREAKOUT_BUFFER_PCT, 0.1,
+            key="tcv2_breakout_buffer", help="Close must clear resistance by at least this % to count as a breakout.",
+        )
+        tcv2_ema_fast = v8.number_input(
+            "Fast EMA (sessions)", min_value=5, max_value=100, value=config.TREND_CONSOL_V2_EMA_FAST,
+            key="tcv2_ema_fast",
+        )
+        tcv2_ema_slow = v9.number_input(
+            "Slow EMA (sessions)", min_value=50, max_value=300, value=config.TREND_CONSOL_V2_EMA_SLOW,
+            key="tcv2_ema_slow",
+        )
+        tcv2_ema_rising_lookback = st.slider(
+            "Fast-EMA Rising Lookback (sessions)", 1, 20, config.TREND_CONSOL_V2_EMA_FAST_RISING_LOOKBACK, 1,
+            key="tcv2_ema_rising_lookback",
+            help="Fast EMA must sit above its own value this many sessions ago -- checked for both the "
+                 "stock and Nifty 50. There is no relative-strength-vs-benchmark condition in V2.",
+        )
+
+    tcv2_params = trend_consolidation_v2.default_params()
+    tcv2_params.update({
+        "min_price": tcv2_min_price,
+        "min_traded_value": tcv2_min_traded_value_cr * 1_00_00_000,
+        "max_width_pct": tcv2_max_width,
+        "consolidation_period": tcv2_consolidation_period,
+        "prebreakout_distance_min_pct": tcv2_distance[0],
+        "prebreakout_distance_max_pct": tcv2_distance[1],
+        "volume_multiplier": tcv2_volume_mult,
+        "breakout_buffer_pct": tcv2_breakout_buffer,
+        "ema_fast": tcv2_ema_fast,
+        "ema_slow": tcv2_ema_slow,
+        "ema_fast_rising_lookback": tcv2_ema_rising_lookback,
+    })
+    tcv2_cache_key = (tcv2_universe_name, tuple(sorted(tcv2_params.items())))
+
+    tcv2_cache = st.session_state.trend_consol_v2_cache.get(tcv2_cache_key)
+    tcv2_run_clicked = st.button("▶️ Run Trend + Consolidation V2 Scan", type="primary", key="run_trend_consol_v2")
+
+    if tcv2_run_clicked or tcv2_cache is None:
+        tcv2_progress = st.progress(0, text="Starting scan...")
+
+        def _on_tcv2_progress(frac, text_):
+            tcv2_progress.progress(min(frac, 1.0), text=text_)
+
+        with st.spinner(f"Scanning {tcv2_universe_choice} for Trend + Consolidation V2 setups..."):
+            result_tcv2 = trend_consolidation_v2.scan_trend_consolidation_v2(
+                universe_name=tcv2_universe_name, params=tcv2_params, progress_callback=_on_tcv2_progress,
+            )
+        tcv2_progress.empty()
+        st.session_state.trend_consol_v2_cache[tcv2_cache_key] = (time.time(), result_tcv2)
+    else:
+        result_tcv2 = tcv2_cache[1]
+
+    tcv2_scan_time = st.session_state.trend_consol_v2_cache[tcv2_cache_key][0]
+    tcv2_scan_label = datetime.datetime.fromtimestamp(tcv2_scan_time, tz=IST).strftime("%d %b %Y, %I:%M %p IST")
+    tcv2_asof = result_tcv2.get("data_asof_date")
+    tcv2_asof_label = tcv2_asof.strftime("%d %b %Y") if tcv2_asof else "N/A"
+    st.caption(
+        f"Last scanned: {tcv2_scan_label} · Latest completed candle: {tcv2_asof_label} · "
+        f"Universe: {result_tcv2['universe_label']} ({result_tcv2['universe_size']} instruments) · "
+        f"Scanned OK: {result_tcv2['scanned']}"
+    )
+    if not result_tcv2.get("benchmark_available"):
+        st.warning(
+            "⚠️ Nifty 50 index data was unavailable during this scan -- the market-trend condition "
+            "couldn't be verified, so it was NOT silently passed. No candidates are shown this run. "
+            "Try running the scan again."
+        )
+
+    tcv2_flags = []
+    if result_tcv2["insufficient_history_count"]:
+        tcv2_flags.append(
+            f"{result_tcv2['insufficient_history_count']} candidate(s) have under "
+            f"{config.TREND_CONSOL_V2_MIN_HISTORY_SESSIONS} sessions of history"
+        )
+    if result_tcv2["missing_volume_count"]:
+        tcv2_flags.append(f"{result_tcv2['missing_volume_count']} candidate(s) have missing/zero recent volume")
+    if result_tcv2["stale_data_count"]:
+        tcv2_flags.append(f"{result_tcv2['stale_data_count']} candidate(s) have stale (>5 day old) data")
+    if tcv2_flags:
+        st.warning("⚠️ " + "; ".join(tcv2_flags) + ".")
+
+    pre_df_tcv2 = result_tcv2["pre_breakout"]
+    confirmed_df_tcv2 = result_tcv2["confirmed_breakout"]
+    unconfirmed_df_tcv2 = result_tcv2["volume_unconfirmed"]
+
+    tab_pre_tcv2, tab_confirmed_tcv2, tab_unconfirmed_tcv2 = st.tabs([
+        f"👀 Pre-Breakout Watchlist ({len(pre_df_tcv2)})",
+        f"🚀 Confirmed Breakouts ({len(confirmed_df_tcv2)})",
+        f"⚠️ Volume Unconfirmed ({len(unconfirmed_df_tcv2)})",
+    ])
+    with tab_pre_tcv2:
+        st.caption("Approaching resistance -- this means approaching, not a guaranteed future breakout.")
+        _render_tcv2_tab(pre_df_tcv2, "tcv2_pre")
+    with tab_confirmed_tcv2:
+        st.caption("Closed above resistance with the consolidation, trend, and volume conditions all confirmed.")
+        _render_tcv2_tab(confirmed_df_tcv2, "tcv2_confirmed")
+    with tab_unconfirmed_tcv2:
+        st.caption("Same qualifying price breakout, but volume didn't confirm it -- treat with extra caution.")
+        _render_tcv2_tab(unconfirmed_df_tcv2, "tcv2_unconfirmed")
+
+    st.divider()
+    st.markdown("#### 📊 Selected Candidate Chart")
+    tcv2_ticker = st.session_state.tcv2_selected_ticker
+    if not tcv2_ticker:
+        st.caption("👆 Click a row in any table above to see its chart here.")
+    else:
+        tcv2_signal_idx = result_tcv2["signal_idx"].get(tcv2_ticker)
+        tcv2_resistance = result_tcv2["resistance_by_ticker"].get(tcv2_ticker)
+        tcv2_support = result_tcv2["support_by_ticker"].get(tcv2_ticker)
+        if tcv2_signal_idx is None:
+            st.caption(f"No chart data for {tcv2_ticker} under the current scan -- select a row above again.")
+        else:
+            with st.spinner(f"Loading chart for {tcv2_ticker}..."):
+                tcv2_chart_history = scanner.download_history([tcv2_ticker], auto_adjust=True)
+            tcv2_chart_df = tcv2_chart_history.get(tcv2_ticker)
+            if tcv2_chart_df is None:
+                st.caption("Price history unavailable for this ticker right now.")
+            else:
+                tcv2_fig = trend_consolidation_v2.build_trend_chart(
+                    tcv2_chart_df, tcv2_ticker, tcv2_signal_idx, tcv2_resistance, tcv2_support, tcv2_params,
+                )
+                st.plotly_chart(tcv2_fig, width="stretch")
+                combined_df = next(
+                    (df_ for df_ in (pre_df_tcv2, confirmed_df_tcv2, unconfirmed_df_tcv2)
+                     if not df_.empty and tcv2_ticker in df_["Ticker"].values), None,
+                )
+                if combined_df is not None:
+                    st.markdown(f"**Why qualified:**\n\n{combined_df.loc[combined_df['Ticker'] == tcv2_ticker, 'Why Qualified'].iloc[0]}")
+                st.caption(
+                    "Red = resistance, green dotted = support, both frozen exactly as computed for this "
+                    "signal (shaded band = the consolidation window) -- these never change when later "
+                    "data arrives."
+                )
+
+    st.caption(
+        "These settings are a starting hypothesis, not a proven profitable strategy. Not investment "
+        "advice. See 🧪 Trend + Consolidation V2 Backtest to paper-test this strategy's historical rules, "
+        "including a direct comparison against V1."
+    )
+    render_footer(scan_ts=tcv2_scan_time)
+
+
+# ---------------------------------------------------------------------------
+# Page: Trend + Consolidation V2 Backtest (paper trading)
+# ---------------------------------------------------------------------------
+
+elif nav_page == "Trend + Consolidation V2 Backtest":
+    st.markdown("### 🧪 Daily Trend + Consolidation V2 — Paper-Trading Backtest")
+    st.warning(
+        "🧪 **Unvalidated.** These settings are a starting hypothesis, not a proven profitable strategy. "
+        "This does NOT claim any success rate or guaranteed returns -- a 60% win rate is an evaluation "
+        "goal, not a result this page asserts -- and no number here is a probability of profit. Uses "
+        "today's Nifty 500 / All-NSE membership applied to past dates (no free historical point-in-time "
+        "membership data exists), which introduces survivorship bias -- stocks removed from the index "
+        "during the backtest window are still included for dates before their removal, and vice versa. "
+        "Not investment advice; for research only."
+    )
+    st.caption(
+        "Walks each stock's full adjusted-price history day by day: a Confirmed Breakout signal enters at "
+        "the *next* session's open (skipped if that open gapped more than the configured % above the "
+        "signal close, or opened back at/below resistance), is sized to risk a fixed % of equity -- capped "
+        "by both available cash and a maximum % of equity per position -- and exits at a support-anchored "
+        "stop, a profit target, or after a maximum holding period, whichever comes first. A trade is "
+        "skipped outright if its stop would sit at/above entry, or if the entry-to-stop distance would "
+        "exceed the configured risk cap. If a gap-down opens below the stop, the exit fills at that open "
+        "(with slippage) rather than the unreachable stop price; if both stop and target are touched the "
+        "same day with no way to know the true intraday order, it's resolved conservatively as a stop-out "
+        "and flagged. Brokerage, transaction charges, and slippage are all modeled. The development and "
+        "out-of-sample periods run as two independent simulations so neither can leak state into the "
+        "other. Positions still open at a period's end are listed separately, never folded into the "
+        "closed-trade win rate/expectancy/profit-factor statistics."
+    )
+
+    tcb2_universe_choice = st.radio(
+        "Universe", ["Nifty 500", "All NSE Stocks (₹100+)"], horizontal=True, key="tcb2_universe",
+    )
+    tcb2_universe_name = "nifty500" if tcb2_universe_choice == "Nifty 500" else "all_nse"
+
+    today2 = datetime.date.today()
+    default_oos_start2 = today2 - datetime.timedelta(days=180)
+    default_dev_end2 = default_oos_start2 - datetime.timedelta(days=1)
+    default_dev_start2 = default_dev_end2 - datetime.timedelta(days=365 * 3)
+
+    st.markdown("##### Development Period")
+    dcol1b, dcol2b = st.columns(2)
+    tcb2_dev_start = dcol1b.date_input("Start", value=default_dev_start2, key="tcb2_dev_start")
+    tcb2_dev_end = dcol2b.date_input("End", value=default_dev_end2, key="tcb2_dev_end")
+    st.markdown("##### Out-of-Sample Period (untouched during development)")
+    ocol1b, ocol2b = st.columns(2)
+    tcb2_oos_start = ocol1b.date_input("Start", value=default_oos_start2, key="tcb2_oos_start")
+    tcb2_oos_end = ocol2b.date_input("End", value=today2, key="tcb2_oos_end")
+
+    with st.expander("⚙️ Strategy & Trading Settings"):
+        st.caption("Strategy thresholds (same meaning as the live scanner page):")
+        b1, b2, b3 = st.columns(3)
+        tcb2_max_width = b1.slider("Max. Consolidation Width (%)", 1.0, 20.0, config.TREND_CONSOL_V2_MAX_WIDTH_PCT, 0.5, key="tcb2_max_width")
+        tcb2_consolidation_period = b2.slider("Consolidation Period (sessions)", 5, 40, config.TREND_CONSOL_V2_CONSOLIDATION_PERIOD, 1, key="tcb2_consolidation_period")
+        tcb2_volume_mult = b3.slider("Breakout Volume Multiplier", 1.0, 4.0, config.TREND_CONSOL_V2_VOLUME_MULTIPLIER, 0.1, key="tcb2_volume_mult")
+        b4, b5 = st.columns(2)
+        tcb2_breakout_buffer = b4.slider("Breakout Buffer (%)", 0.0, 5.0, config.TREND_CONSOL_V2_BREAKOUT_BUFFER_PCT, 0.1, key="tcb2_breakout_buffer")
+        tcb2_min_price = b5.number_input("Minimum Close Price (₹)", min_value=0.0, value=config.TREND_CONSOL_V2_MIN_PRICE_INR, step=10.0, key="tcb2_min_price")
+
+        st.caption("Paper-trading mechanics:")
+        b6, b7, b8 = st.columns(3)
+        tcb2_initial_equity = b6.number_input(
+            "Initial Paper Capital (₹)", min_value=10000.0, value=config.TREND_CONSOL_V2_BACKTEST_INITIAL_EQUITY_INR,
+            step=100000.0, key="tcb2_initial_equity",
+        )
+        tcb2_risk_pct = b7.slider(
+            "Risk per Trade (% of equity)", 0.1, 5.0, config.TREND_CONSOL_V2_BACKTEST_RISK_PCT, 0.1,
+            key="tcb2_risk_pct", help="Position size is chosen so a full stop-out loses about this % of current equity.",
+        )
+        tcb2_stop_atr_mult = b8.slider(
+            "Stop Buffer (× ATR14, off support)", 0.0, 2.0, config.TREND_CONSOL_V2_BACKTEST_STOP_ATR_MULT, 0.05,
+            key="tcb2_stop_atr_mult",
+            help="Stop = stored consolidation support − this × signal-day ATR14 (anchored to support, "
+                 "not to the entry price the way V1's stop is).",
+        )
+        b9, b10, b11 = st.columns(3)
+        tcb2_target_rr = b9.slider(
+            "Profit Target (× initial risk)", 0.5, 5.0, config.TREND_CONSOL_V2_BACKTEST_TARGET_RR_MULT, 0.25, key="tcb2_target_rr",
+        )
+        tcb2_max_risk_distance = b10.slider(
+            "Max Risk Distance (% of entry)", 1.0, 15.0, config.TREND_CONSOL_V2_BACKTEST_MAX_RISK_DISTANCE_PCT, 0.5,
+            key="tcb2_max_risk_distance", help="Skip the entry if the entry-to-stop distance exceeds this % of entry.",
+        )
+        tcb2_max_position_pct = b11.slider(
+            "Max Position Size (% of equity)", 1.0, 25.0, config.TREND_CONSOL_V2_BACKTEST_MAX_POSITION_PCT, 1.0,
+            key="tcb2_max_position_pct", help="No single position may exceed this % of current equity, on top of the risk-based size.",
+        )
+        b12, b13, b14 = st.columns(3)
+        tcb2_max_holding = b12.slider(
+            "Max Holding (sessions)", 1, 60, config.TREND_CONSOL_V2_BACKTEST_MAX_HOLDING_SESSIONS, 1, key="tcb2_max_holding",
+        )
+        tcb2_entry_gap_max = b13.slider(
+            "Skip Entry if Gap Above Signal Close (%)", 0.5, 10.0, config.TREND_CONSOL_V2_BACKTEST_ENTRY_GAP_MAX_PCT, 0.5,
+            key="tcb2_entry_gap_max",
+        )
+        b15, b16, b17 = st.columns(3)
+        tcb2_brokerage = b15.number_input("Brokerage (% per side)", min_value=0.0, value=config.TREND_CONSOL_V2_BACKTEST_BROKERAGE_PCT, step=0.01, key="tcb2_brokerage")
+        tcb2_transaction = b16.number_input("Transaction Charges (% per side)", min_value=0.0, value=config.TREND_CONSOL_V2_BACKTEST_TRANSACTION_CHARGES_PCT, step=0.01, key="tcb2_transaction")
+        tcb2_slippage = b17.number_input("Slippage (% per side)", min_value=0.0, value=config.TREND_CONSOL_V2_BACKTEST_SLIPPAGE_PCT, step=0.01, key="tcb2_slippage")
+
+    tcb2_params = trend_consolidation_v2.default_params()
+    tcb2_params.update({
+        "min_price": tcb2_min_price,
+        "max_width_pct": tcb2_max_width,
+        "consolidation_period": tcb2_consolidation_period,
+        "volume_multiplier": tcb2_volume_mult,
+        "breakout_buffer_pct": tcb2_breakout_buffer,
+        "initial_equity": tcb2_initial_equity,
+        "risk_pct": tcb2_risk_pct,
+        "stop_atr_mult": tcb2_stop_atr_mult,
+        "target_rr_mult": tcb2_target_rr,
+        "max_risk_distance_pct": tcb2_max_risk_distance,
+        "max_position_pct": tcb2_max_position_pct,
+        "max_holding_sessions": tcb2_max_holding,
+        "entry_gap_max_pct": tcb2_entry_gap_max,
+        "brokerage_pct": tcb2_brokerage,
+        "transaction_charges_pct": tcb2_transaction,
+        "slippage_pct": tcb2_slippage,
+    })
+
+    if st.button("▶️ Run V2 Backtest", type="primary", key="run_tcv2_backtest"):
+        if tcb2_dev_start >= tcb2_dev_end or tcb2_oos_start >= tcb2_oos_end:
+            st.error("Each period's start date must be before its end date.")
+        else:
+            tcb2_progress = st.progress(0, text="Starting backtest...")
+
+            def _on_tcb2_progress(frac, text_):
+                tcb2_progress.progress(min(frac, 1.0), text=text_)
+
+            with st.spinner(f"Backtesting {tcb2_universe_choice}... this walks the full history of every stock and can take a couple of minutes."):
+                backtest_result_v2 = trend_consolidation_v2.run_full_backtest(
+                    universe_name=tcb2_universe_name, params=tcb2_params,
+                    dev_start=pd.Timestamp(tcb2_dev_start), dev_end=pd.Timestamp(tcb2_dev_end),
+                    oos_start=pd.Timestamp(tcb2_oos_start), oos_end=pd.Timestamp(tcb2_oos_end),
+                    progress_callback=_on_tcb2_progress,
+                )
+            tcb2_progress.empty()
+            st.session_state.trend_consol_v2_backtest_result = backtest_result_v2
+
+    tcb2_result = st.session_state.trend_consol_v2_backtest_result
+
+    def _render_period_results_v2(label: str, metrics: dict, trades: list, curve: list, open_positions: list, key_prefix: str):
+        st.markdown(f"##### {label}")
+        if metrics["trade_count"] == 0:
+            st.info("No closed trades in this period with these settings.")
+        else:
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Closed Trades", metrics["trade_count"])
+            m2.metric("Win Rate", f"{metrics['win_rate']:.1f}%" if metrics["win_rate"] is not None else "N/A")
+            m3.metric("Expectancy / Trade", f"₹{metrics['expectancy']:,.0f}" if metrics["expectancy"] is not None else "N/A")
+            m4.metric(
+                "Profit Factor",
+                f"{metrics['profit_factor']:.2f}" if metrics["profit_factor"] is not None else "N/A (no losses)",
+            )
+            m5, m6, m7, m8 = st.columns(4)
+            m5.metric("Avg Win", f"₹{metrics['avg_win']:,.0f}" if metrics["avg_win"] is not None else "N/A")
+            m6.metric("Avg Loss", f"₹{metrics['avg_loss']:,.0f}" if metrics["avg_loss"] is not None else "N/A")
+            m7.metric("Portfolio Return", f"{metrics['total_return_pct']:+.2f}%" if metrics["total_return_pct"] is not None else "N/A")
+            m8.metric("Max Drawdown", f"{metrics['max_drawdown_pct']:.2f}%" if metrics["max_drawdown_pct"] is not None else "N/A")
+            st.caption(
+                f"Avg. holding period: {metrics['avg_holding_sessions']} sessions"
+                if metrics.get("avg_holding_sessions") is not None else ""
+            )
+            if metrics["ambiguous_count"]:
+                st.caption(
+                    f"⚠️ {metrics['ambiguous_count']} trade(s) had both stop and target touched on the same "
+                    "day with no way to know the true order -- resolved conservatively as a stop-out."
+                )
+            if metrics["trade_count"] < 30:
+                st.caption(f"⚠️ Small sample -- only {metrics['trade_count']} closed trades in this period. Treat these stats with caution.")
+
+            if metrics.get("by_year"):
+                st.caption("Results by year (closed trades):")
+                by_year_df = pd.DataFrame([
+                    {"Year": year, "Trades": v["trade_count"], "Win Rate %": v["win_rate"], "Net P&L (₹)": v["net_pnl"]}
+                    for year, v in metrics["by_year"].items()
+                ])
+                st.dataframe(by_year_df, hide_index=True, width="stretch")
+
+            if curve:
+                curve_df = pd.DataFrame(curve, columns=["Date", "Equity"])
+                fig = go.Figure(data=[go.Scatter(x=curve_df["Date"], y=curve_df["Equity"], mode="lines",
+                                                  line=dict(color="#4FD1E8", width=2))])
+                fig.update_layout(
+                    template="plotly_dark", height=280, margin=dict(l=10, r=10, t=20, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis_title="Equity (₹)",
+                )
+                st.plotly_chart(fig, width="stretch")
+
+            trades_df = pd.DataFrame(trades)
+            if not trades_df.empty:
+                trades_df = trades_df[["ticker", "entry_date", "exit_date", "entry_price", "exit_price",
+                                        "stop", "target", "shares", "pnl", "pnl_pct", "exit_reason",
+                                        "ambiguous_stop_target", "holding_sessions"]]
+                _export_buttons(trades_df, f"{key_prefix}_trades", key_prefix)
+                st.dataframe(trades_df, hide_index=True, width="stretch")
+
+        if open_positions:
+            st.caption(f"📍 {len(open_positions)} position(s) still open at period end (not counted in the stats above):")
+            st.dataframe(pd.DataFrame(open_positions), hide_index=True, width="stretch")
+
+    if tcb2_result is None:
+        st.caption("👆 Set your dates and settings, then click ▶️ Run V2 Backtest.")
+    elif tcb2_result.get("error"):
+        st.error(tcb2_result["error"])
+    else:
+        st.caption(
+            f"Universe: {tcb2_result['universe_label']} ({tcb2_result['universe_size']} instruments, "
+            f"{tcb2_result['scanned']} scanned OK) · {tcb2_result['signal_count']} historical Confirmed "
+            f"Breakout signals found across the full available history."
+        )
+        _render_period_results_v2(
+            "📈 Development Period", tcb2_result["dev_metrics"], tcb2_result["dev_trades"],
+            tcb2_result["dev_curve"], tcb2_result["dev_open"], "tcb2_dev",
+        )
+        st.divider()
+        _render_period_results_v2(
+            "🔒 Out-of-Sample Period (untouched)", tcb2_result["oos_metrics"], tcb2_result["oos_trades"],
+            tcb2_result["oos_curve"], tcb2_result["oos_open"], "tcb2_oos",
+        )
+
+    st.divider()
+    st.markdown("#### 🔬 V1 vs V2 Comparison")
+    st.caption(
+        "Runs both versions' full backtests over the identical universe, dates, starting capital, and "
+        "cost assumptions (V1's own strategy rules vs V2's own strategy rules, as configured above) so "
+        "the comparison is apples-to-apples. Each version keeps its own documented entry/exit rules."
+    )
+    if st.button("▶️ Run V1 vs V2 Comparison", key="run_v1v2_comparison"):
+        if tcb2_dev_start >= tcb2_dev_end or tcb2_oos_start >= tcb2_oos_end:
+            st.error("Each period's start date must be before its end date.")
+        else:
+            cmp_progress = st.progress(0, text="Starting V1 backtest...")
+
+            v1_cmp_params = trend_consolidation.default_params()
+            v1_cmp_params.update({
+                "initial_equity": tcb2_initial_equity, "entry_gap_max_pct": tcb2_entry_gap_max,
+                "brokerage_pct": tcb2_brokerage, "transaction_charges_pct": tcb2_transaction,
+                "slippage_pct": tcb2_slippage,
+            })
+            v1_cmp_result = trend_consolidation.run_full_backtest(
+                universe_name=tcb2_universe_name, params=v1_cmp_params,
+                dev_start=pd.Timestamp(tcb2_dev_start), dev_end=pd.Timestamp(tcb2_dev_end),
+                oos_start=pd.Timestamp(tcb2_oos_start), oos_end=pd.Timestamp(tcb2_oos_end),
+                progress_callback=lambda f, t: cmp_progress.progress(min(f * 0.5, 0.5), text=f"V1: {t}"),
+            )
+            v2_cmp_result = trend_consolidation_v2.run_full_backtest(
+                universe_name=tcb2_universe_name, params=tcb2_params,
+                dev_start=pd.Timestamp(tcb2_dev_start), dev_end=pd.Timestamp(tcb2_dev_end),
+                oos_start=pd.Timestamp(tcb2_oos_start), oos_end=pd.Timestamp(tcb2_oos_end),
+                progress_callback=lambda f, t: cmp_progress.progress(min(0.5 + f * 0.5, 1.0), text=f"V2: {t}"),
+            )
+            cmp_progress.empty()
+            st.session_state.trend_consol_v1v2_comparison = {"v1": v1_cmp_result, "v2": v2_cmp_result}
+
+    cmp_result = st.session_state.trend_consol_v1v2_comparison
+    if cmp_result is None:
+        st.caption("👆 Click ▶️ Run V1 vs V2 Comparison to see both versions side by side.")
+    elif cmp_result["v1"].get("error") or cmp_result["v2"].get("error"):
+        st.error(cmp_result["v1"].get("error") or cmp_result["v2"].get("error"))
+    else:
+        def _cmp_row(period_label: str, v1_metrics: dict, v2_metrics: dict) -> list[dict]:
+            fields = [
+                ("Closed Trades", "trade_count", "{:.0f}"), ("Win Rate %", "win_rate", "{:.1f}"),
+                ("Expectancy / Trade (₹)", "expectancy", "{:,.0f}"), ("Profit Factor", "profit_factor", "{:.2f}"),
+                ("Avg Win (₹)", "avg_win", "{:,.0f}"), ("Avg Loss (₹)", "avg_loss", "{:,.0f}"),
+                ("Portfolio Return %", "total_return_pct", "{:+.2f}"), ("Max Drawdown %", "max_drawdown_pct", "{:.2f}"),
+            ]
+            out = []
+            for label, key, fmt in fields:
+                v1_val = v1_metrics.get(key)
+                v2_val = v2_metrics.get(key)
+                out.append({
+                    "Period": period_label, "Metric": label,
+                    "V1": fmt.format(v1_val) if v1_val is not None else "N/A",
+                    "V2": fmt.format(v2_val) if v2_val is not None else "N/A",
+                })
+            return out
+
+        cmp_rows = (
+            _cmp_row("Development", cmp_result["v1"]["dev_metrics"], cmp_result["v2"]["dev_metrics"])
+            + _cmp_row("Out-of-Sample", cmp_result["v1"]["oos_metrics"], cmp_result["v2"]["oos_metrics"])
+        )
+        st.dataframe(pd.DataFrame(cmp_rows), hide_index=True, width="stretch")
+        st.caption(
+            f"V1 signals found: {cmp_result['v1']['signal_count']} · "
+            f"V2 signals found: {cmp_result['v2']['signal_count']} -- a large gap here mostly reflects how "
+            "much stricter V2's market-trend gate is (both the stock AND Nifty 50 must satisfy a 3-part "
+            "EMA uptrend check, with no relative-strength escape hatch V1 has)."
         )
 
     st.divider()

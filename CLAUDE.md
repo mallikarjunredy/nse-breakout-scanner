@@ -490,6 +490,120 @@ hypothesis, not a proven profitable strategy" and never reports a
 "success rate" framed as a probability of profit -- the live scan's
 "Why Qualified" explains which rules matched, nothing more.
 
+## Fourth strategy, Version 2: "Daily Trend + Consolidation Breakout — V2"
+
+`src/trend_consolidation_v2.py`, two pages: "🧭 Daily Trend + Consolidation
+V2" (live scan) and "🧪 Trend + Consolidation V2 Backtest" (its own
+walk-forward backtest, plus a V1-vs-V2 comparison section). Built from a
+detailed written quant spec the user supplied directly (not a chart),
+explicitly as a **separate version sitting alongside V1**, not a
+replacement -- `src/trend_consolidation.py` is completely untouched:
+same module, same two pages, same session-state cache keys, same
+historical scan results exactly as they were before V2 existed.
+
+**This is a genuinely different rule set, not V1 with different
+numbers.** The differences, each deliberate and spec-driven:
+
+- **Trend filter**: EMA(50)/EMA(200) (V1 uses SMA), required for *both*
+  the stock and Nifty 50 to each independently satisfy Close > EMA50,
+  EMA50 > EMA200, and EMA50 above its own value `ema_fast_rising_lookback`
+  (5) sessions ago. There is **no relative-strength-vs-benchmark gate**
+  in V2 at all -- V1's "stock's 63-session return beats Nifty 50's own"
+  condition doesn't exist here; the spec only asked for the three-part
+  EMA check, symmetric across stock and index.
+- **Stop placement**: `stored support - stop_atr_mult x signal-day
+  ATR14` -- anchored to the consolidation's own support level (frozen at
+  signal time, so today's own bar can never move it), not to the entry
+  price the way V1's `entry - stop_atr_mult x ATR14` is. A structural
+  "stop just below the base," not a volatility distance from wherever
+  the fill happened to land.
+- **New risk-distance cap**: a signal is skipped entirely if the
+  resulting entry-to-stop distance would exceed `max_risk_distance_pct`
+  (6%) of the entry price -- V1 has no equivalent cap, so V1 will size
+  and take a trade whose stop sits arbitrarily far from entry as long as
+  the risk-based share count comes out positive.
+- **New per-position size cap**: `max_position_pct` (10%) of current
+  equity, enforced on top of the existing risk-based and cash-available
+  share caps (`shares = min(risk_based, cash_based, position_cap_based)`)
+  -- V1 has no such ceiling, so a single very-low-risk-per-share trade
+  could otherwise consume a large fraction of the paper portfolio.
+- **Allocation tie-break**: when several signals compete for limited
+  cash on the same entry day, V2 sorts by the preceding 20-session
+  average daily traded value (liquidity) descending, ticker alphabetical
+  as the tie-break -- V1 sorts by the signal day's own volume-ratio
+  spike instead. Both are deterministic, just prioritizing a different
+  signal.
+- **Open positions at period end** are returned from `run_backtest` as a
+  separate `open_at_end` list and rendered in their own small table,
+  never silently folded into the closed-trade win-rate/expectancy/
+  profit-factor statistics the way V1's version implicitly drops them.
+- **`compute_metrics` adds**: `avg_holding_sessions` and a `by_year`
+  breakdown (trade count/win rate/net P&L per exit year) that V1's own
+  version of the function doesn't track -- V2's function *calls* V1's
+  `trend_consolidation.compute_metrics` first for every closed-trade
+  statistic that function already computes (identical formulas), then
+  adds these two on top, specifically so a V1-vs-V2 comparison is
+  computed identically on both sides rather than risking two slightly
+  different implementations of "win rate."
+- **Traded-value liquidity floor**: identical ₹10 crore / 20-session
+  default to V1, but always labelled "(est.)" in the UI -- Yahoo has no
+  provider-supplied traded-value field, so this is Close × Volume the
+  same way V1 computes it, just disclosed explicitly per the spec's
+  "label any close × volume estimate" instruction (V1's own page text
+  doesn't carry this disclosure).
+- **Defaults that differ from V1** (same mechanism, different number):
+  pre-breakout distance band 0-2% (V1: 0-3%), breakout buffer 0.2% (V1:
+  0.5%), profit target 1.5x initial risk (V1: 2x), max holding 15
+  sessions (V1: 20). Consolidation period (15), max width (8%), and
+  volume multiplier (1.5x) all match V1's own defaults.
+
+**"Show failed conditions explicitly"** (the spec's own phrase): the
+live scan's "Why Qualified" string is a full per-condition checklist
+(✓/✗ price floor, liquidity, stock trend, consolidation width, market
+trend, plus the breakout-specific price/volume checks for Confirmed/
+Unconfirmed rows) with each condition's actual computed value shown
+regardless of whether it happened to pass -- not just a final verdict.
+
+**Chart** (`build_trend_chart`): the same frozen consolidation-window
+visual as V1's chart (EMA50/EMA200 instead of SMA50/SMA200), plus an
+optional `trade` argument -- when a signal was actually paper-traded in
+a backtest run, the chart overlays the executed entry/stop/target as
+dashed lines and the exit as an X marker, each legend-labelled
+"(paper trade, est.)" so they're never mistaken for guaranteed prices.
+
+**Verification performed before shipping** (the spec's own section 12):
+ran the engine against real data and confirmed, across 1,061 historical
+Confirmed Breakout signals found on the Nifty 500 (2+ years of history):
+zero where Close didn't actually clear the buffered resistance (no
+wick-only breakouts slip through); zero resistance/support window
+mismatches when independently recomputed from the raw OHLC excluding
+the signal candle; a sample trade's stop matched the
+`support - stop_atr_mult x ATR` formula exactly; risk distance and
+position value both stayed inside their configured caps. A scoped
+backtest (dev 2022-2025, OOS 2025-2026) produced 36 dev trades
+(58.3% win rate, profit factor 1.49) and 22 OOS trades (40.9% win rate,
+profit factor 0.55) -- reported as-is, including the OOS period
+underperforming dev, since the spec explicitly asks not to present any
+number as a guaranteed or cherry-picked result. Also confirmed: as of
+the build date, Nifty 50 itself failed V2's three-part EMA uptrend
+check (close below a falling EMA50, itself below EMA200), so the live
+scan correctly returned **zero** candidates in every tier that day even
+though a meaningful fraction of individual stocks passed their own
+trend/consolidation conditions -- the market-level gate blocking
+everything is the intended behavior of a stricter regime filter, not a
+bug, the same "strict conditions -> few or zero matches is normal"
+pattern already documented for Upside Buy Movement.
+
+**Not yet built** (de-scoped for this pass, since the written spec's
+scope was already very large): a dedicated "recalculate target/position
+size after actual paper entry" display separate from the backtest's own
+numbers (the backtest already does this calculation internally; there's
+no separate live-scan-side re-estimate surfaced), and a reset-to-default
+button on the threshold sliders (every other adjustable strategy in this
+app has the same gap -- Streamlit's own widgets don't support
+read-back-and-reset without the `_pending_*_reset` flag pattern
+documented above, not worth the complexity here either).
+
 ## Branding and header
 
 The app is branded "🕉️ Lifeline Trade" (top-left header, `.app-logo-title`)
