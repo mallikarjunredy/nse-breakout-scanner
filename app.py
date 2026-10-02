@@ -16,9 +16,10 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 
 from src import (
-    breakout_flag, breakout_flag_tracker, bullish_recovery, config, deep_dive, detail, indicators,
-    market_overview, pre_breakout, resistance_breakout, rising_channel, rsi_divergence, scan_history, scanner,
-    trend_consolidation, trend_consolidation_v2, triple_ema_golden_cross, watchlist,
+    breakout_flag, breakout_flag_tracker, bullish_recovery, config, deep_dive, detail, forecast_accuracy,
+    indicators, market_overview, news_impact, portfolio, pre_breakout, resistance_breakout, rising_channel,
+    rsi_divergence, scan_history, scanner, trend_consolidation, trend_consolidation_v2, triple_ema_golden_cross,
+    watchlist,
 )
 
 st.set_page_config(page_title="NSE Scanner", page_icon="📈", layout="wide")
@@ -150,6 +151,8 @@ if "trend_consol_v2_backtest_result" not in st.session_state:
     st.session_state.trend_consol_v2_backtest_result = None
 if "trend_consol_v1v2_comparison" not in st.session_state:
     st.session_state.trend_consol_v1v2_comparison = None
+if "news_selected_ticker" not in st.session_state:
+    st.session_state.news_selected_ticker = None
 if "chart_symbol" not in st.session_state:
     st.session_state.chart_symbol = "^NSEI"  # Home's chart pane defaults to Nifty 50, daily
 if "rc_selected_ticker" not in st.session_state:
@@ -355,6 +358,7 @@ _NAV_ITEMS = [
     ("Bullish Recovery Above EMAs", "🌅"),
     ("Resistance Breakout", "⛰️"), ("Triple EMA Golden Cross", "🥇"), ("Breakout Flag Continuation", "🚩"),
     ("RSI Divergence at Support", "🔀"),
+    ("Portfolio", "💼"), ("Global News Impact", "🌐"),
     ("Watchlist", "⭐"), ("Stock Analysis", "📈"), ("Scan History", "🕐"), ("Help & Support", "❓"),
 ]
 
@@ -4043,6 +4047,310 @@ if nav_page == "RSI Divergence at Support":
         "recommendations, and not a claim that any stock will keep moving in this direction."
     )
     render_footer(scan_ts=rd_scan_time)
+
+
+# ---------------------------------------------------------------------------
+# Page: Portfolio
+# ---------------------------------------------------------------------------
+
+if nav_page == "Portfolio":
+    st.markdown("### 💼 Portfolio")
+    st.caption(
+        "📡 Data Source: Yahoo Finance • Delayed / Cached / EOD data • Not official NSE real-time feed. "
+        "Your actual holdings (ticker, quantity, buy price) -- separate from the Watchlist, which just "
+        "tracks stocks you're following. Current prices and P&L are fetched live each time you view this "
+        "page; a ticker whose price can't be fetched right now shows N/A rather than a stale or fabricated "
+        "number. Built as a prerequisite for the 🌐 Global News Impact page's portfolio-weighted analysis."
+    )
+
+    with st.expander("➕ Add Holding"):
+        pc1, pc2, pc3 = st.columns(3)
+        pf_ticker_input = pc1.text_input("Ticker (e.g. TCS, RELIANCE)", key="pf_add_ticker")
+        pf_quantity = pc2.number_input("Quantity", min_value=0.0, step=1.0, key="pf_add_qty")
+        pf_buy_price = pc3.number_input("Buy Price (₹)", min_value=0.0, step=1.0, key="pf_add_price")
+        pc4, pc5 = st.columns(2)
+        pf_buy_date = pc4.date_input("Buy Date", value=datetime.date.today(), key="pf_add_date")
+        pf_notes = pc5.text_input("Notes (optional)", key="pf_add_notes")
+        if st.button("➕ Add to Portfolio", key="pf_add_submit"):
+            if not pf_ticker_input.strip() or pf_quantity <= 0 or pf_buy_price <= 0:
+                st.error("Enter a ticker, a positive quantity, and a positive buy price.")
+            else:
+                pf_normalized = pre_breakout.normalize_ticker(pf_ticker_input)
+                portfolio.add_holding(
+                    pf_normalized, pf_quantity, pf_buy_price, pf_buy_date.strftime("%Y-%m-%d"), pf_notes,
+                )
+                st.success(f"Added {pf_quantity:g} {pf_normalized} @ ₹{pf_buy_price:.2f}.")
+                st.rerun()
+
+    with st.expander("💰 Cash Balance"):
+        pf_current_cash = portfolio.load_cash()
+        pf_cash_input = st.number_input(
+            "Cash (₹)", min_value=0.0, value=pf_current_cash, step=1000.0, key="pf_cash_input",
+        )
+        if st.button("💾 Save Cash Balance", key="pf_cash_save"):
+            portfolio.save_cash(pf_cash_input)
+            st.success("Cash balance updated.")
+            st.rerun()
+
+    pf_result = portfolio.get_portfolio()
+    pf_table = pf_result["table"]
+    if pf_table.empty and pf_result["cash"] == 0:
+        st.info("Your portfolio is empty. Add a holding above to get started.")
+    else:
+        pm1, pm2, pm3 = st.columns(3)
+        pm1.metric("Total Value", f"₹{pf_result['total_value']:,.0f}")
+        pm2.metric("Total Invested", f"₹{pf_result['total_invested']:,.0f}")
+        pm3.metric("Cash", f"₹{pf_result['cash']:,.0f}")
+
+        if not pf_table.empty:
+            _export_buttons(pf_table, "portfolio", "portfolio")
+            pf_event = st.dataframe(
+                pf_table, hide_index=True, width="stretch",
+                column_config={
+                    "Avg. Buy Price": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Invested (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Current Price": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Current Value (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Unrealized P&L (₹)": st.column_config.NumberColumn(format="₹%+.2f"),
+                    "Unrealized P&L %": st.column_config.NumberColumn(format="%+.2f%%"),
+                    "Weight %": st.column_config.NumberColumn(format="%.2f%%"),
+                },
+                on_select="rerun", selection_mode="single-row", key="portfolio_table",
+            )
+            pf_rows = pf_event["selection"]["rows"]
+            if pf_rows:
+                st.session_state.selected_ticker = pf_table.iloc[pf_rows[0]]["Ticker"]
+
+            st.markdown("##### 🗑️ Remove a Lot")
+            pf_lots = portfolio.load_holdings()
+            if pf_lots:
+                pf_lot_labels = {
+                    e["id"]: f"{e['ticker']} — {e['quantity']:g} @ ₹{e['buy_price']:.2f} ({e['buy_date']})"
+                    for e in pf_lots
+                }
+                pf_remove_id = st.selectbox(
+                    "Select a lot to remove", list(pf_lot_labels.keys()),
+                    format_func=lambda i: pf_lot_labels[i], key="pf_remove_select",
+                )
+                if st.button("🗑️ Remove Selected Lot", key="pf_remove_submit"):
+                    portfolio.remove_holding(pf_remove_id)
+                    st.success("Lot removed.")
+                    st.rerun()
+
+    st.divider()
+    st.markdown("#### 🔎 Selected Stock Analysis")
+    render_detail_panel()
+    render_footer()
+
+
+# ---------------------------------------------------------------------------
+# Page: Global News Impact
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=config.NEWS_IMPACT_CACHE_TTL_SECONDS, show_spinner=False)
+def _get_global_news_cached():
+    return news_impact.fetch_global_news()
+
+
+def _render_news_links(items: list[dict]):
+    for item in items[:5]:
+        st.markdown(f"- [{item['title']}]({item['link']}) — *{item['source']}*")
+
+
+if nav_page == "Global News Impact":
+    st.markdown("### 🌐 Global News Impact & Stock Forecast")
+    st.warning(
+        "🧪 **Phase 1 -- directional only, not a verified feed.** News comes from free public RSS feeds "
+        "and Yahoo Finance's news aggregation, NOT authenticated official accounts or a licensed/paid "
+        "feed -- every item is labelled accordingly, and you should click through to the original source "
+        "before treating any headline as confirmed. There is **no numeric price forecast** in this phase: "
+        f"every stock shows a direction (Positive/Negative/Mixed/Unclear) and a confidence label only -- "
+        f"\"{news_impact.NO_PERCENT_FORECAST_MSG}\" Topic tagging and direction are plain keyword matching, "
+        "not an AI/NLP model (no LLM is configured in this app). Exposure data for each stock is shown "
+        "with its source -- 'Sourced' entries cite a specific real disclosure; 'General/uncited' entries "
+        "are illustrative company profiles, not filing citations, and no percentage is ever invented for "
+        "them. This does not distinguish confirmed news from rumors/opinions/proposals -- read the "
+        "original source."
+    )
+
+    news_refresh_col, news_spacer = st.columns([1, 3])
+    with news_refresh_col:
+        if st.button("🔄 Refresh News", key="news_refresh"):
+            _get_global_news_cached.clear()
+            st.rerun()
+
+    with st.spinner("Fetching global news from public sources..."):
+        news_items = _get_global_news_cached()
+    st.caption(
+        f"{len(news_items)} deduplicated items from public RSS feeds (Economic Times, Business Standard, "
+        f"LiveMint, CNBC World, Investing.com Commodities) + Yahoo Finance news for Nifty 50/S&P 500/Crude "
+        f"Oil/USD-INR/US 10Y Yield · Cached {config.NEWS_IMPACT_CACHE_TTL_SECONDS // 60} min."
+    )
+
+    # --- Next Trading Session Outlook -----------------------------------
+    st.markdown("#### 🗓️ Next Trading Session Outlook")
+    next_session = news_impact.resolve_next_session()
+    st.info(
+        f"Next trading session: **{next_session.strftime('%A, %d %b %Y')}** (IST, weekday-only resolution -- "
+        "does not account for NSE exchange holidays, same disclosed limitation as the Market OPEN/CLOSED badge)."
+    )
+
+    # --- Verified Global News ---------------------------------------------
+    st.markdown("#### 📰 Global News (Unverified Web Sources)")
+    news_filter_scope = st.selectbox("Filter by region", ["All", "India", "Global"], key="news_filter_scope")
+    news_filter_topic = st.selectbox(
+        "Filter by topic", ["All"] + list(news_impact.TOPIC_KEYWORDS.keys()), key="news_filter_topic",
+    )
+    filtered_news = news_items
+    if news_filter_scope != "All":
+        filtered_news = [n for n in filtered_news if n["scope"] == news_filter_scope.lower()]
+    if news_filter_topic != "All":
+        filtered_news = [n for n in filtered_news if news_filter_topic in n["topics"]]
+    news_table = pd.DataFrame([
+        {"Source": n["source"], "Headline": n["title"], "Topics": ", ".join(n["topics"]) or "—",
+         "Collected": n["collected_at_ist"], "Link": n["link"]}
+        for n in filtered_news
+    ])
+    if news_table.empty:
+        st.caption("No news items match this filter right now.")
+    else:
+        st.dataframe(
+            news_table, hide_index=True, width="stretch",
+            column_config={"Link": st.column_config.LinkColumn("Link", display_text="Open ↗")},
+        )
+
+    # --- Sector Impact Ranking -------------------------------------------
+    st.markdown("#### 🏭 Sector Impact Ranking")
+    st.caption(
+        "Ranked by how many fetched news items matched that sector's tracked exposure topics -- a count, "
+        "not a numeric impact score (no validated weighting model exists)."
+    )
+    sector_df = news_impact.sector_impact_ranking(news_items)
+    st.dataframe(sector_df, hide_index=True, width="stretch")
+
+    # --- My Portfolio Impact / My Watchlist Impact ------------------------
+    pw = news_impact.portfolio_and_watchlist_impact(news_items)
+
+    st.markdown("#### 💼 My Portfolio Impact")
+    if not pw["portfolio_rows"]:
+        st.caption("Your portfolio is empty -- add holdings on the 💼 Portfolio page first.")
+    else:
+        port_impact_df = pd.DataFrame(pw["portfolio_rows"])
+        st.dataframe(
+            port_impact_df, hide_index=True, width="stretch",
+            column_config={"Weight %": st.column_config.NumberColumn(format="%.2f%%")},
+        )
+        st.caption(f"{news_impact.NO_PERCENT_FORECAST_MSG} No ₹ impact is shown for the same reason.")
+
+    st.markdown("#### 👀 My Watchlist Impact")
+    if not pw["watchlist_rows"]:
+        st.caption("Your watchlist is empty.")
+    else:
+        watch_impact_df = pd.DataFrame(pw["watchlist_rows"]).drop(columns=["Weight %"])
+        st.dataframe(watch_impact_df, hide_index=True, width="stretch")
+        st.caption(news_impact.NO_PERCENT_FORECAST_MSG)
+
+    # --- Full stock table + drill-down -------------------------------------
+    st.markdown("#### 📋 All Tracked Stocks")
+    all_sectors = sorted({e["sector"] for e in news_impact.EXPOSURE_MAP.values()})
+    gn_sector_filter = st.multiselect("Filter by sector", all_sectors, key="gn_sector_filter")
+    gn_confidence_filter = st.multiselect("Filter by confidence", ["Low", "Medium", "High"], key="gn_confidence_filter")
+
+    stock_rows = []
+    for ticker in news_impact.EXPOSURE_MAP:
+        result = news_impact.assess_stock_impact(ticker, news_items)
+        main_event = result["matched_news"][0]["title"] if result["matched_news"] else "—"
+        stock_rows.append({
+            "Ticker": ticker, "Company Name": result["name"], "Sector": result["sector"],
+            "Main News Event": main_event, "Business Exposure": result["profile"][:80] + ("…" if len(result["profile"]) > 80 else ""),
+            "Direction": result["direction"], "Confidence": result["confidence"],
+            "Portfolio Weight %": next(
+                (r["Weight %"] for r in pw["portfolio_rows"] if r["Ticker"] == ticker), None,
+            ),
+            "Updated": news_items[0]["collected_at_ist"] if news_items else "N/A",
+        })
+    stock_df = pd.DataFrame(stock_rows)
+    if gn_sector_filter:
+        stock_df = stock_df[stock_df["Sector"].isin(gn_sector_filter)]
+    if gn_confidence_filter:
+        stock_df = stock_df[stock_df["Confidence"].isin(gn_confidence_filter)]
+    gn_event = st.dataframe(
+        stock_df, hide_index=True, width="stretch",
+        column_config={"Portfolio Weight %": st.column_config.NumberColumn(format="%.2f%%")},
+        on_select="rerun", selection_mode="single-row", key="gn_stock_table",
+    )
+    gn_rows = gn_event["selection"]["rows"]
+    if gn_rows:
+        st.session_state.news_selected_ticker = stock_df.iloc[gn_rows[0]]["Ticker"]
+
+    gn_ticker = st.session_state.news_selected_ticker
+    if gn_ticker:
+        gn_result = news_impact.assess_stock_impact(gn_ticker, news_items)
+        if gn_result:
+            st.markdown(f"##### 🔍 {gn_result['name']} ({gn_ticker})")
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Direction", gn_result["direction"])
+            d2.metric("Confidence", gn_result["confidence"])
+            d3.metric("Exposure Source", "Sourced" if gn_result["sourced"] else "General/Uncited")
+            st.markdown(f"**Exposure profile:** {gn_result['profile']}")
+            if gn_result["source_url"]:
+                st.markdown(f"**Source:** [{gn_result['source']}]({gn_result['source_url']})")
+            else:
+                st.caption(f"Source: {gn_result['source']}")
+            st.markdown("**Explanation (event → factor → exposure → potential impact):**")
+            for line in gn_result["explanation_chain"]:
+                st.markdown(f"- {line}")
+            if gn_result["positive_signals"]:
+                st.markdown("**Positive signals:** " + "; ".join(gn_result["positive_signals"][:3]))
+            if gn_result["negative_signals"]:
+                st.markdown("**Negative signals:** " + "; ".join(gn_result["negative_signals"][:3]))
+            if gn_result["matched_news"]:
+                st.markdown("**Original news links:**")
+                _render_news_links(gn_result["matched_news"])
+            st.caption(f"⚠️ {gn_result['forecast_note']} This also does not distinguish confirmed news from "
+                       "rumors/opinions/proposals -- verify against the original source.")
+
+    # --- Forecast Accuracy History ------------------------------------------
+    st.markdown("#### 🎯 Forecast Accuracy History")
+    newly_evaluated = forecast_accuracy.evaluate_pending()
+    if newly_evaluated:
+        st.caption(f"Resolved {newly_evaluated} pending forecast(s) against real completed sessions.")
+    acc_summary = forecast_accuracy.get_accuracy_summary()
+    if acc_summary["sample_size"] == 0:
+        st.info(
+            "No evaluated forecasts yet. Click \"📝 Log Today's Directional Calls\" below to start building "
+            "a real track record -- this page will never show a fabricated accuracy percentage."
+        )
+    else:
+        a1, a2 = st.columns(2)
+        a1.metric("Directional Accuracy", f"{acc_summary['directional_accuracy_pct']:.1f}%")
+        a2.metric("Evaluated Sample Size", acc_summary["sample_size"])
+        st.caption(
+            f"{acc_summary['pending_count']} forecast(s) still pending their target session. "
+            "Directional accuracy only in this phase -- no % forecasts exist yet to score for error or "
+            "prediction-range coverage."
+        )
+    if st.button("📝 Log Today's Directional Calls", key="gn_log_forecasts"):
+        target = news_impact.resolve_next_session().strftime("%Y-%m-%d")
+        logged = 0
+        for ticker in news_impact.EXPOSURE_MAP:
+            result = news_impact.assess_stock_impact(ticker, news_items)
+            if result["direction"] in ("Positive", "Negative"):
+                if forecast_accuracy.record_forecast(
+                    ticker, result["direction"], result["confidence"], target,
+                    result["explanation_chain"][0] if result["explanation_chain"] else "",
+                ):
+                    logged += 1
+        st.success(f"Logged {logged} new directional call(s) for {target}.")
+        st.rerun()
+    with st.expander("📜 Full Forecast Log"):
+        log_df = forecast_accuracy.get_log_table()
+        if log_df.empty:
+            st.caption("Nothing logged yet.")
+        else:
+            st.dataframe(log_df, hide_index=True, width="stretch")
+
+    render_footer()
 
 
 # ---------------------------------------------------------------------------

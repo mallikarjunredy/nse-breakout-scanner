@@ -8,6 +8,9 @@ data/ca_bundle.pem
 data/watchlist.json
 data/scan_history.json
 data/breakout_flag_tracker.json
+data/portfolio.json
+data/portfolio_cash.json
+data/forecast_log.json
 !data/.gitkeep
 streamlit_out.log
 streamlit_err.log

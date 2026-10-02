@@ -285,3 +285,13 @@ TREND_CONSOL_V2_BACKTEST_ENTRY_GAP_MAX_PCT = 2.0  # skip entry if next open is m
 TREND_CONSOL_V2_BACKTEST_BROKERAGE_PCT = 0.03  # per side, % of trade value
 TREND_CONSOL_V2_BACKTEST_TRANSACTION_CHARGES_PCT = 0.10  # STT/exchange/other charges, per side, % of trade value
 TREND_CONSOL_V2_BACKTEST_SLIPPAGE_PCT = 0.05  # per side, % of fill price
+
+# "Global News Impact & Stock Forecast" -- see src/news_impact.py and
+# src/forecast_accuracy.py. News is fetched live from free, public RSS
+# feeds (no API key -- none is configured in this project) plus
+# yfinance's own .news aggregation; everything is labelled "unverified
+# web source," never "verified," since this app can't cryptographically
+# authenticate an official account or access a paid/licensed feed.
+NEWS_IMPACT_CACHE_TTL_SECONDS = 15 * 60  # 15 min -- news moves faster than a full universe scan
+NEWS_IMPACT_MAX_ITEMS_PER_SOURCE = 25
+NEWS_IMPACT_DEDUP_TITLE_WORD_OVERLAP = 0.8  # fraction of normalized words shared to treat two headlines as the same story

@@ -1199,6 +1199,162 @@ price didn't" divergence this strategy is built around is visible at a
 glance, not just implied by the numbers) -- plus the row's own "Why
 Qualified" string (including the RSI continuation note) underneath.
 
+## Portfolio
+
+`src/portfolio.py`, page "💼 Portfolio" -- real holdings (ticker,
+quantity, buy price, buy date, notes), distinct from the Watchlist
+(which has no quantities and isn't "owned" stocks). Built as a
+prerequisite for Global News Impact's "My Portfolio Impact" section,
+which needs real holding weights to work from -- this app had no
+holdings-tracking feature before it.
+
+Each "Add Holding" click appends its own lot to `data/portfolio.json`
+(id = `f"{ticker}_{time.time()}"`), so buying the same stock twice at
+different prices/dates creates two lots rather than silently averaging
+them; `get_portfolio()` aggregates lots by ticker (summed quantity,
+weighted-average buy price) for display, so the UI still shows one row
+per stock, with a separate "🗑️ Remove a Lot" selector for removing one
+specific lot. An optional single cash balance
+(`data/portfolio_cash.json`) is added to the priced holdings' value for
+the Weight %/total-value denominator -- "Account for cash and holdings
+with unavailable forecasts" from the Global News Impact spec.
+
+A ticker whose fresh price can't be fetched right now shows N/A for
+Current Price/Value/P&L (excluded from the Weight % denominator, but
+its invested amount still counts toward the total so the portfolio
+doesn't silently shrink) rather than a stale or fabricated number --
+same discipline as `breakout_flag_tracker.get_performance()`. Selecting
+a row sets the shared `st.session_state.selected_ticker`, so it
+surfaces in the same "🔎 Selected Stock Analysis" detail panel every
+other table in this app uses.
+
+## Global News Impact & Stock Forecast (Phase 1)
+
+`src/news_impact.py` + `src/forecast_accuracy.py`, page "🌐 Global News
+Impact". Built from a very large written spec (verified multi-source
+news ingestion, authenticated social-media monitoring, company-specific
+exposure analysis, a validated statistical/ML forecasting model,
+portfolio-weighted ₹ impact, and tracked forecast accuracy) that
+assumed infrastructure this app doesn't have. Before writing any code,
+this was scoped down explicitly with the user (via AskUserQuestion) on
+four blocking questions -- build a real Portfolio feature first (see
+above), fetch news best-effort from free public sources labelled
+unverified (no API credentials exist in this project), ship directional
+assessments only with no fabricated % forecasts, and start with one
+vertical slice rather than the full spec at once. **Nothing here claims
+more than it actually does** -- see "What this is NOT" in
+`news_impact.py`'s own module docstring, repeated in the page's own
+warning banner.
+
+**A key technical correction mid-build**: the spec said "best-effort
+via web search." Claude's own `WebSearch`/`WebFetch` tools are only
+callable in a Claude Code session, not from Python code running inside
+the deployed Streamlit app -- there is no way for `news_impact.py` to
+invoke them at request time. The actual implementation instead uses
+**free, public RSS feeds** fetched with plain `requests`+`lxml` (both
+already dependencies), confirmed live and returning current-dated items
+by direct testing before being hardcoded: Economic Times Markets, ET
+Top News, Business Standard Markets, LiveMint Markets, CNBC World,
+Investing.com Commodities. Reuters' public RSS endpoint 404s and
+Moneycontrol's returned stale ~2024-dated cached items -- neither is
+used. This is genuinely live and callable with zero API keys, unlike a
+literal (impossible) in-app WebSearch call would have been.
+
+**No LLM is configured in this app either**, so "AI language models for
+extracting events and explaining company exposure" (the spec's own
+phrase) isn't literally implemented -- topic tagging
+(`TOPIC_KEYWORDS`: interest_rates/tariffs_trade/oil_energy/geopolitical/
+currency/commodities) and directional polarity (`_POSITIVE_WORDS`/
+`_NEGATIVE_WORDS`) are both plain keyword matching, disclosed as a
+simplification everywhere it's used. A headline with no clear keyword
+match always resolves to "Unclear," never a guessed direction.
+
+**`EXPOSURE_MAP`** is a seed set of ~13 well-known large caps, not a
+Nifty-500-wide dataset -- building a verified exposure profile for
+every stock was out of scope for this pass. Two entries
+(`TCS.NS`, `SUNPHARMA.NS`) are `sourced=True` and cite a specific real
+disclosure found by direct research before this was built (TCS's own
+FY2026 investor fact sheet: North America 48.6%/UK 17.4%/Continental
+Europe 15.4% of revenue; Sun Pharma's ~30% US revenue share per
+Business Standard/Nomura, FY2026) -- every other entry is
+`sourced=False`, a qualitative, uncited profile from general public
+knowledge of that company's business, explicitly flagged "illustrative,
+not a specific filing citation" in its own `source` field. **No
+percentage is ever invented for an unsourced entry** -- `profile`
+strings for those are geography/commodity *names* only, never numbers.
+`MARUTI.NS`/`ITC.NS`/`HINDUNILVR.NS` are deliberately included as
+low-global-sensitivity contrast cases (domestic-focused businesses),
+not just export-heavy examples.
+
+**`assess_stock_impact(ticker, news_items)`** returns `None` for any
+ticker not in `EXPOSURE_MAP` -- never a fabricated assessment for an
+unmapped stock (the Watchlist Impact table shows these as an explicit
+"No exposure data" row rather than silently dropping them). For a
+mapped ticker: news items are filtered to those whose tagged topics
+overlap the stock's own tracked `topics`; direction is Positive/
+Negative/Mixed/Unclear from the keyword-polarity heuristic across the
+matched items; confidence is "Medium" only when the exposure entry is
+`sourced=True` *and* at least one news item matched, "Low" otherwise --
+**never "High"**, since no validated model exists to justify it. Every
+result carries `forecast_note = NO_PERCENT_FORECAST_MSG` (the spec's
+own required fallback string, verbatim) and is never accompanied by a
+% number or a ₹ impact anywhere in the UI.
+
+**Portfolio/Watchlist impact** (`portfolio_and_watchlist_impact()`):
+portfolio rows get a real Weight % from `portfolio.get_portfolio()`;
+watchlist rows never get a fabricated weight or ₹ impact, since a
+watchlist ticker isn't an actual holding. Neither gets a numeric ₹
+impact at all -- there's no % forecast to multiply a holding value by.
+A holding/watchlist ticker with no exposure-map entry gets its own
+"No exposure data" row instead of being silently excluded.
+
+**Next Trading Session Outlook** (`resolve_next_session()`): the next
+weekday after today in IST -- does **not** account for NSE exchange
+holidays, the same disclosed limitation as the Market OPEN/CLOSED
+badge; no holiday calendar is wired up anywhere in this app.
+
+**Does not attempt**: authenticating social-media accounts (no
+Twitter/X API credentials exist, and this app has no way to
+cryptographically verify an account either way); distinguishing
+confirmed news from rumors/opinions/proposals (every result and every
+page caption explicitly says so, and tells the user to check the
+original source); a numeric price forecast of any kind in this phase.
+
+**Forecast Accuracy History** (`src/forecast_accuracy.py`,
+`data/forecast_log.json`): starts genuinely empty -- there is no
+historical track record to show, which is the honest state the spec
+itself asks for over a fabricated backtest-style accuracy figure.
+"📝 Log Today's Directional Calls" records every current Positive/
+Negative assessment (Mixed/Unclear calls aren't logged -- there's no
+single predicted sign to score them against) against
+`resolve_next_session()`'s date, skipping a `(ticker, target_session)`
+pair already logged so re-clicking doesn't duplicate entries (same
+dedup-on-click pattern as `breakout_flag_tracker.add_matches()`).
+`evaluate_pending()` resolves a pending entry only once its target
+session has real completed price data (point-in-time correct: it reads
+only that session's own close and the prior session's close, never
+later data), marking Positive/Negative calls correct/incorrect by
+actual close-to-close sign and leaving Mixed/Unclear calls
+unscored (`correct=None`, not applicable). v1 scope is directional
+accuracy only -- there's no numeric forecast yet to compute mean
+absolute error or prediction-range coverage against; those fields are
+left for a later phase.
+
+**Verified before shipping**: ran the full pipeline against real,
+live data -- 135 deduplicated news items fetched from the six sources
+above; TCS correctly matched real same-day interest_rate/currency-
+tagged headlines (RBI/rupee pressure, bank FX losses) and returned
+Negative/Medium; Sun Pharma correctly matched real tariff-tagged
+headlines (Trump, India-US trade talks) and returned Unclear (no clear
+polarity keyword on either side -- the honest "didn't guess" outcome,
+not a forced call); Maruti correctly returned Unclear/Low with zero
+matched items (no tracked topics); an unmapped test ticker correctly
+returned `None`. `forecast_accuracy`'s dedup-on-click, point-in-time
+evaluation, and empty-state summary were each verified against real
+historical price data (a logged test forecast was correctly evaluated
+as incorrect against TCS's actual close-to-close move on its target
+date, not silently marked correct).
+
 ## Home page layout: terminal-style split
 
 Top to bottom:
